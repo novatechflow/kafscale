@@ -100,3 +100,28 @@ func TestCloneMetadataIsolation(t *testing.T) {
 		t.Fatalf("store state mutated via clone")
 	}
 }
+
+func TestInMemoryStoreOffsets(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+
+	offset, err := store.NextOffset(ctx, "orders", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 0 {
+		t.Fatalf("expected initial offset 0 got %d", offset)
+	}
+
+	if err := store.UpdateOffsets(ctx, "orders", 0, 9); err != nil {
+		t.Fatalf("UpdateOffsets: %v", err)
+	}
+
+	offset, err = store.NextOffset(ctx, "orders", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 10 {
+		t.Fatalf("expected offset 10 got %d", offset)
+	}
+}

@@ -100,6 +100,14 @@ func (r *byteReader) NullableString() (*string, error) {
 	return &str, nil
 }
 
+func (r *byteReader) Int8() (int8, error) {
+	b, err := r.read(1)
+	if err != nil {
+		return 0, err
+	}
+	return int8(b[0]), nil
+}
+
 type byteWriter struct {
 	buf []byte
 }
@@ -136,6 +144,10 @@ func (w *byteWriter) Bool(v bool) {
 	} else {
 		w.write([]byte{0})
 	}
+}
+
+func (w *byteWriter) Int8(v int8) {
+	w.write([]byte{byte(v)})
 }
 
 func (w *byteWriter) String(v string) {

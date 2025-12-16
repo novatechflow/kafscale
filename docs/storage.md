@@ -56,9 +56,9 @@ type S3Client interface {
 - `buffer.go` exposes a `WriteBuffer` struct with thresholds for size, message count, and time since last flush. The broker’s partition writer goroutine feeds batches into the buffer, and when `ShouldFlush` returns true it hands the accumulated batches to a `SegmentWriter`.
 - `SegmentWriter` calculates CRC, builds headers/footers, and emits both the segment and sparse index (every N bytes as configured).
 
-## Cache Interaction
+## Cache Interaction & Read-Ahead
 
-- `reader.go` will talk to `pkg/cache` via an interface:
+- `log.go` (acting as both writer and reader) talks to `pkg/cache` via:
 
 ```go
 type SegmentCache interface {
@@ -67,7 +67,8 @@ type SegmentCache interface {
 }
 ```
 
-This keeps the storage package decoupled from any specific cache implementation (in-memory LRU, redis, etc.).
+- When a segment flushes or a fetch loads a segment, the log optionally prefetches the next `ReadAheadSegments` segments from S3 and seeds the cache so consumers hit memory rather than S3 on sequential reads.
+- `PartitionLogConfig` now includes `ReadAheadSegments` and `CacheEnabled` flags so operators can tune prefetch depth per topic/partition profile.
 
 ## Observability Hooks
 

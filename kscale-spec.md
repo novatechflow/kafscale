@@ -14,30 +14,20 @@ Kafscale deliberately focuses on durable message transport only. There is no bui
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Kubernetes Cluster                              │
-│                                                                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                          │
-│  │   Broker    │  │   Broker    │  │   Broker    │   Stateless pods         │
-│  │   Pod 0     │  │   Pod 1     │  │   Pod 2     │   (HPA scaled)           │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                          │
-│         │                │                │                                  │
-│         └────────────────┼────────────────┘                                  │
-│                          │                                                   │
-│                          ▼                                                   │
-│                   ┌─────────────┐                                            │
-│                   │    etcd     │  Metadata store (topic config,             │
-│                   │  (3 nodes)  │  consumer offsets, partition assignments)  │
-│                   └─────────────┘                                            │
-│                                                                              │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │
-                                   ▼
-                            ┌─────────────┐
-                            │     S3      │  Segment storage
-                            │   Bucket    │  (source of truth)
-                            └─────────────┘
+```mermaid
+flowchart TD
+    subgraph K8s["Kubernetes Cluster"]
+        subgraph Brokers["Broker Pods (HPA scaled)"]
+            B0["Broker Pod 0"]
+            B1["Broker Pod 1"]
+            B2["Broker Pod 2"]
+        end
+        ETCD[("etcd (metadata)\nTopic config / offsets")]
+        B0 --> ETCD
+        B1 --> ETCD
+        B2 --> ETCD
+    end
+    K8s --> S3[("S3 Bucket\nSegment storage (source of truth)")]
 ```
 
 ### Component Responsibilities
@@ -85,17 +75,18 @@ Secrets are never written to etcd; only the operator and pods with the `kafscale
 
 ### Topics and Partitions
 
-```
-Topic: "orders"
-├── Partition 0
-│   ├── segment-00000000000000000000.kfs
-│   ├── segment-00000000000000050000.kfs
-│   └── segment-00000000000000100000.kfs
-├── Partition 1
-│   ├── segment-00000000000000000000.kfs
-│   └── segment-00000000000000050000.kfs
-└── Partition 2
-    └── segment-00000000000000000000.kfs
+```mermaid
+flowchart TD
+    T["Topic: orders"]
+    T --> P0["Partition 0"]
+    T --> P1["Partition 1"]
+    T --> P2["Partition 2"]
+    P0 --> S0a["segment-00000000000000000000.kfs"]
+    P0 --> S0b["segment-00000000000000050000.kfs"]
+    P0 --> S0c["segment-00000000000000100000.kfs"]
+    P1 --> S1a["segment-00000000000000000000.kfs"]
+    P1 --> S1b["segment-00000000000000050000.kfs"]
+    P2 --> S2a["segment-00000000000000000000.kfs"]
 ```
 
 ### S3 Key Structure
@@ -409,48 +400,42 @@ Value: {
 }
 ```
 
+### Metadata Snapshot
+
+```
+Key:   /kafscale/metadata/snapshot
+Value: {
+  "controller_id": 1,
+  "cluster_id": "kafscale-prod",
+  "brokers": [...],
+  "topics": [...]
+}
+```
+
+The operator periodically writes the full cluster metadata (JSON mirroring `ClusterMetadata`). Brokers watch this key and refresh their in-memory view whenever it changes, ensuring topic creations and partition reassignments propagate without restarting pods.
+
 ---
 
 ## Broker Architecture
 
 ### Process Structure
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │              Broker Process                  │
-                    │                                              │
-┌─────────┐        │  ┌──────────────────────────────────────┐   │
-│ Client  │◄──────►│  │         Network Layer                 │   │
-│ (TCP)   │        │  │   (Kafka Protocol Handlers)           │   │
-└─────────┘        │  └──────────────────┬───────────────────┘   │
-                    │                     │                        │
-                    │  ┌──────────────────▼───────────────────┐   │
-                    │  │         Request Router                │   │
-                    │  │   (Metadata, Produce, Fetch, etc.)    │   │
-                    │  └─────────────────┬────────────────────┘   │
-                    │           ┌────────┴────────┐                │
-                    │           ▼                 ▼                │
-                    │  ┌─────────────────┐ ┌─────────────────┐    │
-                    │  │  Write Path     │ │  Read Path      │    │
-                    │  │                 │ │                 │    │
-                    │  │ ┌─────────────┐ │ │ ┌─────────────┐ │    │
-                    │  │ │Write Buffer │ │ │ │ Segment     │ │    │
-                    │  │ │(per partition)│ │ │ Cache       │ │    │
-                    │  │ └──────┬──────┘ │ │ └──────┬──────┘ │    │
-                    │  │        │        │ │        │        │    │
-                    │  │ ┌──────▼──────┐ │ │ ┌──────▼──────┐ │    │
-                    │  │ │Segment      │ │ │ │S3 Reader   │ │    │
-                    │  │ │Builder      │ │ │ │            │ │    │
-                    │  │ └──────┬──────┘ │ │ └──────┬──────┘ │    │
-                    │  └────────┼────────┘ └────────┼────────┘    │
-                    │           │                   │              │
-                    └───────────┼───────────────────┼──────────────┘
-                                │                   │
-                                ▼                   ▼
-                         ┌─────────────┐     ┌─────────────┐
-                         │     S3      │     │     S3      │
-                         │   (Write)   │     │   (Read)    │
-                         └─────────────┘     └─────────────┘
+```mermaid
+flowchart LR
+    C[Client (TCP)] --> NL[Network Layer\nKafka protocol handlers]
+    NL --> RR[Request Router\n(Metadata / Produce / Fetch)]
+    RR --> WP[Write Path]
+    RR --> RP[Read Path]
+
+    subgraph Write Path
+        WB[Per-partition Write Buffer] --> SB[Segment Builder]
+        SB --> S3Write[(S3 Bucket\nWrite)]
+    end
+
+    subgraph Read Path
+        SC[Segment Cache] --> SR[S3 Reader]
+        SR --> S3Read[(S3 Bucket\nRead)]
+    end
 ```
 
 ### Goroutine Model
@@ -509,54 +494,54 @@ Producer Request
        │
        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 1. RECEIVE                                                        │
-│    - Parse ProduceRequest                                         │
-│    - Validate topic exists                                        │
-│    - Check this broker owns partition                             │
+│ 1. RECEIVE                                                       │
+│    - Parse ProduceRequest                                        │
+│    - Validate topic exists                                       │
+│    - Check this broker owns partition                            │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 2. BUFFER                                                         │
-│    - Append to partition's in-memory write buffer                 │
-│    - Assign offsets (atomic increment from etcd high watermark)   │
-│    - Start ack timer if acks=1                                    │
+│ 2. BUFFER                                                        │
+│    - Append to partition's in-memory write buffer                │
+│    - Assign offsets (atomic increment from etcd high watermark)  │
+│    - Start ack timer if acks=1                                   │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 3. FLUSH DECISION                                                 │
-│    Check if flush needed:                                         │
-│    - Buffer size >= segment_buffer_bytes (default 4MB)            │
-│    - Time since last flush >= flush_interval_ms (default 500ms)   │
-│    - Explicit flush request                                       │
+│ 3. FLUSH DECISION                                                │
+│    Check if flush needed:                                        │
+│    - Buffer size >= segment_buffer_bytes (default 4MB)           │
+│    - Time since last flush >= flush_interval_ms (default 500ms)  │
+│    - Explicit flush request                                      │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                ┌────────────────┴────────────────┐
                │ Flush Triggered                 │ No Flush Yet
                ▼                                 ▼
 ┌─────────────────────────────────┐   ┌─────────────────────────────┐
-│ 4. BUILD SEGMENT                 │   │ Return to Producer          │
-│    - Compress batches (snappy)   │   │ (acks=0: immediate)         │
-│    - Build segment header/footer │   │ (acks=1: after buffer)      │
-│    - Calculate CRC               │   └─────────────────────────────┘
-│    - Build sparse index          │
+│ 4. BUILD SEGMENT                │   │ Return to Producer          │
+│    - Compress batches (snappy)  │   │ (acks=0: immediate)         │
+│    - Build segment header/footer│   │ (acks=1: after buffer)      │
+│    - Calculate CRC              │   └─────────────────────────────┘
+│    - Build sparse index         │
 └───────────────────┬─────────────┘
                     │
                     ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 5. S3 UPLOAD                                                      │
-│    - Upload segment file (PutObject)                              │
-│    - Upload index file (PutObject)                                │
-│    - Both uploads must succeed                                    │
+│ 5. S3 UPLOAD                                                     │
+│    - Upload segment file (PutObject)                             │
+│    - Upload index file (PutObject)                               │
+│    - Both uploads must succeed                                   │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 6. COMMIT                                                         │
-│    - Update etcd partition state (high watermark, segment list)   │
-│    - Clear flushed data from write buffer                         │
-│    - Ack waiting producers (acks=all)                             │
+│ 6. COMMIT                                                        │
+│    - Update etcd partition state (high watermark, segment list)  │
+│    - Clear flushed data from write buffer                        │
+│    - Ack waiting producers (acks=all)                            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -567,24 +552,24 @@ Fetch Request
        │
        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 1. RECEIVE                                                        │
-│    - Parse FetchRequest                                           │
-│    - Extract: topic, partition, fetch_offset, max_bytes           │
+│ 1. RECEIVE                                                       │
+│    - Parse FetchRequest                                          │
+│    - Extract: topic, partition, fetch_offset, max_bytes          │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 2. LOCATE SEGMENT                                                 │
-│    - Load partition metadata from etcd (cached)                   │
-│    - Binary search segments to find segment containing offset     │
-│    - Calculate S3 key for segment and index                       │
+│ 2. LOCATE SEGMENT                                                │
+│    - Load partition metadata from etcd (cached)                  │
+│    - Binary search segments to find segment containing offset    │
+│    - Calculate S3 key for segment and index                      │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 3. CHECK CACHE                                                    │
-│    - Check if segment in local LRU cache                          │
-│    - Check if requested range is in read-ahead buffer             │
+│ 3. CHECK CACHE                                                   │
+│    - Check if segment in local LRU cache                         │
+│    - Check if requested range is in read-ahead buffer            │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                ┌────────────────┴────────────────┐
@@ -603,17 +588,17 @@ Fetch Request
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 5. CHECK UNFLUSHED BUFFER                                         │
-│    - If fetch_offset > flushed_offset, also include buffered data │
-│    - Merge buffered records with segment data                     │
+│ 5. CHECK UNFLUSHED BUFFER                                        │
+│    - If fetch_offset > flushed_offset, also include buffered data│
+│    - Merge buffered records with segment data                    │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 6. BUILD RESPONSE                                                 │
-│    - Assemble FetchResponse with record batches                   │
-│    - Include high watermark for consumer lag calculation          │
-│    - Respect max_bytes limit                                      │
+│ 6. BUILD RESPONSE                                                │
+│    - Assemble FetchResponse with record batches                  │
+│    - Include high watermark for consumer lag calculation         │
+│    - Respect max_bytes limit                                     │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
@@ -869,7 +854,7 @@ func handleFetch(req *FetchRequest) *FetchResponse {
            │             │             │
            │             ▼             │
            │    ┌────────────────┐     │
-           │    │ PreparingRe-  │     │
+           │    │ PreparingRe-   │     │
            │    │    balance     │     │
            │    └───────┬────────┘     │
            │            │              │
@@ -878,7 +863,7 @@ func handleFetch(req *FetchRequest) *FetchResponse {
            │            │              │
            │            ▼              │
            │    ┌────────────────┐     │
-           │    │ CompletingRe- │     │
+           │    │ CompletingRe-  │     │
            │    │    balance     │     │
            │    └───────┬────────┘     │
            │            │              │
@@ -895,7 +880,7 @@ func handleFetch(req *FetchRequest) *FetchResponse {
                         │
                         ▼
                 ┌────────────────┐
-                │ PreparingRe-  │
+                │ PreparingRe-   │
                 │    balance     │
                 └────────────────┘
 ```
@@ -1001,8 +986,8 @@ func roundRobinAssign(members []Member, partitions []Partition) map[string][]Par
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Broker Process                            │
-│                                                                  │
+│                        Broker Process                           │
+│                                                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ L1: Hot Segment Cache (in-process)                         │ │
 │  │ - Last N segments per partition                            │ │
@@ -1010,18 +995,18 @@ func roundRobinAssign(members []Member, partitions []Partition) map[string][]Par
 │  │ - Typical size: 1-4GB                                      │ │
 │  │ - Hit latency: <1ms                                        │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                              │                                   │
-│                         Cache Miss                               │
-│                              ▼                                   │
+│                              │                                  │
+│                         Cache Miss                              │
+│                              ▼                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ L2: Index Cache (in-process)                               │ │
 │  │ - All index files for assigned partitions                  │ │
 │  │ - Refreshed on segment roll                                │ │
 │  │ - Typical size: 100-500MB                                  │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                              │                                   │
-│                         Cache Miss                               │
-│                              ▼                                   │
+│                              │                                  │
+│                         Cache Miss                              │
+│                              ▼                                  │
 └──────────────────────────────┼──────────────────────────────────┘
                                │
                                ▼
@@ -1915,9 +1900,13 @@ KAFSCALE_S3_ENDPOINT
 KAFSCALE_S3_PATH_STYLE          # "true" to force path-style URLs
 KAFSCALE_S3_KMS_ARN             # Optional SSE-KMS key ARN
 KAFSCALE_ETCD_ENDPOINTS          # Comma-separated
+KAFSCALE_ETCD_USERNAME
+KAFSCALE_ETCD_PASSWORD
 KAFSCALE_SEGMENT_BYTES
 KAFSCALE_FLUSH_INTERVAL_MS
 KAFSCALE_CACHE_SIZE
+KAFSCALE_CACHE_BYTES
+KAFSCALE_READAHEAD_SEGMENTS
 KAFSCALE_LOG_LEVEL
 ```
 
@@ -2313,19 +2302,19 @@ ENTRYPOINT ["./broker"]
 
 ### Milestone 3: Produce Path
 
-- [ ] ProduceRequest handling
-- [ ] Offset assignment
-- [ ] Batch buffering
-- [ ] S3 segment flush
-- [ ] etcd metadata updates
+- [x] ProduceRequest handling
+- [x] Offset assignment
+- [x] Batch buffering
+- [x] S3 segment flush
+- [x] etcd metadata updates
 
 ### Milestone 4: Fetch Path
 
-- [ ] FetchRequest handling
-- [ ] Segment location logic
-- [ ] S3 range reads
-- [ ] Cache integration
-- [ ] Read-ahead implementation
+- [x] FetchRequest handling
+- [x] Segment location logic
+- [x] S3 range reads
+- [x] Cache integration
+- [x] Read-ahead implementation
 
 ### Milestone 5: Consumer Groups
 

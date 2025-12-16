@@ -57,9 +57,9 @@ func TestParseProduceRequest(t *testing.T) {
 	w.NullableString(&clientID)
 	w.Int16(1) // acks
 	w.Int32(1500)
-	w.Int32(1)     // topic count
+	w.Int32(1) // topic count
 	w.String("orders")
-	w.Int32(1)                 // partitions
+	w.Int32(1)                // partitions
 	w.Int32(0)                // partition id
 	batch := []byte("record") // placeholder bytes
 	w.BytesWithLength(batch)
@@ -80,5 +80,45 @@ func TestParseProduceRequest(t *testing.T) {
 	}
 	if string(produceReq.Topics[0].Partitions[0].Records) != "record" {
 		t.Fatalf("records mismatch")
+	}
+}
+
+func TestParseFetchRequest(t *testing.T) {
+	w := newByteWriter(128)
+	w.Int16(APIKeyFetch)
+	w.Int16(13)
+	w.Int32(9) // correlation
+	clientID := "consumer"
+	w.NullableString(&clientID)
+	w.Int32(1) // replica id
+	w.Int32(0) // max wait
+	w.Int32(0) // min bytes
+	w.Int32(1024)
+	w.Int8(0)
+	w.Int32(0) // session id
+	w.Int32(0) // session epoch
+	w.Int32(1) // topic count
+	w.String("orders")
+	w.Int32(1) // partition count
+	w.Int32(0) // partition
+	w.Int32(0) // leader epoch
+	w.Int64(0) // fetch offset
+	w.Int64(0) // last fetched epoch
+	w.Int64(0) // log start offset
+	w.Int32(1024)
+
+	header, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	if header.APIKey != APIKeyFetch {
+		t.Fatalf("expected fetch api key got %d", header.APIKey)
+	}
+	fetchReq, ok := req.(*FetchRequest)
+	if !ok {
+		t.Fatalf("expected FetchRequest got %T", req)
+	}
+	if len(fetchReq.Topics) != 1 || len(fetchReq.Topics[0].Partitions) != 1 {
+		t.Fatalf("unexpected fetch data: %#v", fetchReq.Topics)
 	}
 }

@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/alo/kafscale/pkg/protocol"
@@ -13,6 +14,10 @@ type Store interface {
 	// Metadata returns brokers, controller ID, and topics. When topics is non-empty,
 	// the implementation should filter to that subset and omit missing topics.
 	Metadata(ctx context.Context, topics []string) (*ClusterMetadata, error)
+	// NextOffset returns the next offset to assign for a topic/partition.
+	NextOffset(ctx context.Context, topic string, partition int32) (int64, error)
+	// UpdateOffsets records the last persisted offset so future appends continue from there.
+	UpdateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64) error
 }
 
 // ClusterMetadata describes the Kafka-visible cluster state.
@@ -25,13 +30,17 @@ type ClusterMetadata struct {
 
 // InMemoryStore is a simple Store backed by in-process state. Useful for early development and tests.
 type InMemoryStore struct {
-	mu    sync.RWMutex
-	state ClusterMetadata
+	mu      sync.RWMutex
+	state   ClusterMetadata
+	offsets map[string]int64
 }
 
 // NewInMemoryStore builds an in-memory metadata store with the provided state.
 func NewInMemoryStore(state ClusterMetadata) *InMemoryStore {
-	return &InMemoryStore{state: cloneMetadata(state)}
+	return &InMemoryStore{
+		state:   cloneMetadata(state),
+		offsets: make(map[string]int64),
+	}
 }
 
 // Update swaps the cluster metadata atomically.
@@ -149,6 +158,35 @@ func cloneStringPtr(s *string) *string {
 	}
 	c := *s
 	return &c
+}
+
+// NextOffset implements Store.NextOffset.
+func (s *InMemoryStore) NextOffset(ctx context.Context, topic string, partition int32) (int64, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.offsets[partitionKey(topic, partition)], nil
+}
+
+// UpdateOffsets implements Store.UpdateOffsets.
+func (s *InMemoryStore) UpdateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offsets[partitionKey(topic, partition)] = lastOffset + 1
+	return nil
+}
+
+func partitionKey(topic string, partition int32) string {
+	return fmt.Sprintf("%s:%d", topic, partition)
 }
 
 var (

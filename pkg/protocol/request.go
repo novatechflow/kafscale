@@ -41,6 +41,25 @@ type ProducePartition struct {
 
 func (ProduceRequest) APIKey() int16 { return APIKeyProduce }
 
+// FetchRequest represents a subset of Kafka FetchRequest v13.
+type FetchRequest struct {
+	ReplicaID int32
+	Topics    []FetchTopicRequest
+}
+
+type FetchTopicRequest struct {
+	Name       string
+	Partitions []FetchPartitionRequest
+}
+
+type FetchPartitionRequest struct {
+	Partition   int32
+	FetchOffset int64
+	MaxBytes    int32
+}
+
+func (FetchRequest) APIKey() int16 { return APIKeyFetch }
+
 // MetadataRequest asks for cluster metadata. Empty Topics means "all".
 type MetadataRequest struct {
 	Topics []string
@@ -148,6 +167,82 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			}
 		}
 		req = &MetadataRequest{Topics: topics}
+	case APIKeyFetch:
+		replicaID, err := reader.Int32()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read fetch replica id: %w", err)
+		}
+		// Skip max wait, min bytes, max bytes, isolation, session id/epoch.
+		if _, err := reader.Int32(); err != nil {
+			return nil, nil, err
+		}
+		if _, err := reader.Int32(); err != nil {
+			return nil, nil, err
+		}
+		if _, err := reader.Int32(); err != nil {
+			return nil, nil, err
+		}
+		if _, err := reader.Int8(); err != nil {
+			return nil, nil, err
+		}
+		if _, err := reader.Int32(); err != nil {
+			return nil, nil, err
+		}
+		if _, err := reader.Int32(); err != nil {
+			return nil, nil, err
+		}
+		topicCount, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		topics := make([]FetchTopicRequest, 0, topicCount)
+		for i := int32(0); i < topicCount; i++ {
+			name, err := reader.String()
+			if err != nil {
+				return nil, nil, err
+			}
+			partCount, err := reader.Int32()
+			if err != nil {
+				return nil, nil, err
+			}
+			partitions := make([]FetchPartitionRequest, 0, partCount)
+			for j := int32(0); j < partCount; j++ {
+				partitionID, err := reader.Int32()
+				if err != nil {
+					return nil, nil, err
+				}
+				if _, err := reader.Int32(); err != nil { // leader epoch
+					return nil, nil, err
+				}
+				fetchOffset, err := reader.Int64()
+				if err != nil {
+					return nil, nil, err
+				}
+				if _, err := reader.Int64(); err != nil { // last fetched epoch
+					return nil, nil, err
+				}
+				if _, err := reader.Int64(); err != nil { // log start offset
+					return nil, nil, err
+				}
+				maxBytes, err := reader.Int32()
+				if err != nil {
+					return nil, nil, err
+				}
+				partitions = append(partitions, FetchPartitionRequest{
+					Partition:   partitionID,
+					FetchOffset: fetchOffset,
+					MaxBytes:    maxBytes,
+				})
+			}
+			topics = append(topics, FetchTopicRequest{
+				Name:       name,
+				Partitions: partitions,
+			})
+		}
+		req = &FetchRequest{
+			ReplicaID: replicaID,
+			Topics:    topics,
+		}
 	default:
 		return nil, nil, fmt.Errorf("unsupported api key %d", header.APIKey)
 	}

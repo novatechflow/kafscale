@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -50,6 +53,8 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *protocol.ProduceRequest:
 		return h.handleProduce(ctx, header, req.(*protocol.ProduceRequest))
+	case *protocol.FetchRequest:
+		return h.handleFetch(ctx, header, req.(*protocol.FetchRequest))
 	default:
 		return nil, ErrUnsupportedAPI
 	}
@@ -64,7 +69,15 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	for _, topic := range req.Topics {
 		partitionResponses := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
-			log := h.getPartitionLog(topic.Name, part.Partition)
+			plog, err := h.getPartitionLog(ctx, topic.Name, part.Partition)
+			if err != nil {
+				log.Printf("partition log init failed: %v", err)
+				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: -1,
+				})
+				continue
+			}
 			batch, err := storage.NewRecordBatchFromBytes(part.Records)
 			if err != nil {
 				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
@@ -73,13 +86,23 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				})
 				continue
 			}
-			result, err := log.AppendBatch(ctx, batch)
+			result, err := plog.AppendBatch(ctx, batch)
 			if err != nil {
 				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
 					Partition: part.Partition,
 					ErrorCode: -1,
 				})
 				continue
+			}
+			if req.Acks == -1 {
+				if err := plog.Flush(ctx); err != nil {
+					log.Printf("flush failed topic=%s partition=%d err=%v", topic.Name, part.Partition, err)
+					partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: -1,
+					})
+					continue
+				}
 			}
 			partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
 				Partition:       part.Partition,
@@ -95,6 +118,10 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 		})
 	}
 
+	if req.Acks == 0 {
+		return nil, nil
+	}
+
 	return protocol.EncodeProduceResponse(&protocol.ProduceResponse{
 		CorrelationID: header.CorrelationID,
 		Topics:        topicResponses,
@@ -102,32 +129,99 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	})
 }
 
-func (h *handler) getPartitionLog(topic string, partition int32) *storage.PartitionLog {
+func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeader, req *protocol.FetchRequest) ([]byte, error) {
+	topicResponses := make([]protocol.FetchTopicResponse, 0, len(req.Topics))
+
+	for _, topic := range req.Topics {
+		partitionResponses := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
+		for _, part := range topic.Partitions {
+			plog, err := h.getPartitionLog(ctx, topic.Name, part.Partition)
+			if err != nil {
+				partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: -1,
+				})
+				continue
+			}
+			records, err := plog.Read(ctx, part.FetchOffset, part.MaxBytes)
+			errorCode := int16(0)
+			if err != nil {
+				if errors.Is(err, storage.ErrOffsetOutOfRange) {
+					errorCode = 1
+				} else {
+					errorCode = -1
+				}
+			}
+			nextOffset, offsetErr := h.store.NextOffset(ctx, topic.Name, part.Partition)
+			if offsetErr != nil {
+				nextOffset = 0
+			}
+			highWatermark := nextOffset
+			if highWatermark > 0 {
+				highWatermark--
+			}
+			var recordSet []byte
+			if errorCode == 0 {
+				recordSet = records
+			}
+			partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
+				Partition:     part.Partition,
+				ErrorCode:     errorCode,
+				HighWatermark: highWatermark,
+				RecordSet:     recordSet,
+			})
+		}
+		topicResponses = append(topicResponses, protocol.FetchTopicResponse{
+			Name:       topic.Name,
+			Partitions: partitionResponses,
+		})
+	}
+
+	return protocol.EncodeFetchResponse(&protocol.FetchResponse{
+		CorrelationID: header.CorrelationID,
+		Topics:        topicResponses,
+		ThrottleMs:    0,
+	})
+}
+
+func (h *handler) getPartitionLog(ctx context.Context, topic string, partition int32) (*storage.PartitionLog, error) {
 	h.logMu.Lock()
-	defer h.logMu.Unlock()
 	partitions := h.logs[topic]
 	if partitions == nil {
 		partitions = make(map[int32]*storage.PartitionLog)
 		h.logs[topic] = partitions
 	}
 	if log, ok := partitions[partition]; ok {
-		return log
+		h.logMu.Unlock()
+		return log, nil
 	}
-	log := storage.NewPartitionLog(topic, partition, h.s3, h.cache, h.logConfig)
-	partitions[partition] = log
-	return log
+	nextOffset, err := h.store.NextOffset(ctx, topic, partition)
+	if err != nil {
+		h.logMu.Unlock()
+		return nil, err
+	}
+	plog := storage.NewPartitionLog(topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+		if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
+			log.Printf("update offsets failed topic=%s partition=%d err=%v", topic, partition, err)
+		}
+	})
+	partitions[partition] = plog
+	h.logMu.Unlock()
+	return plog, nil
 }
-
 func newHandler(store metadata.Store, s3Client storage.S3Client) *handler {
+	readAhead := parseEnvInt("KAFSCALE_READAHEAD_SEGMENTS", 2)
+	cacheSize := parseEnvInt("KAFSCALE_CACHE_BYTES", 32<<20)
 	return &handler{
 		apiVersions: []protocol.ApiVersion{
 			{APIKey: protocol.APIKeyApiVersion, MinVersion: 0, MaxVersion: 0},
 			{APIKey: protocol.APIKeyMetadata, MinVersion: 0, MaxVersion: 0},
 			{APIKey: protocol.APIKeyProduce, MinVersion: 9, MaxVersion: 9},
+			{APIKey: protocol.APIKeyFetch, MinVersion: 13, MaxVersion: 13},
 		},
 		store: store,
 		s3:    s3Client,
-		cache: cache.NewSegmentCache(32 << 20),
+		cache: cache.NewSegmentCache(cacheSize),
 		logs:  make(map[string]map[int32]*storage.PartitionLog),
 		logConfig: storage.PartitionLogConfig{
 			Buffer: storage.WriteBufferConfig{
@@ -137,6 +231,8 @@ func newHandler(store metadata.Store, s3Client storage.S3Client) *handler {
 			Segment: storage.SegmentWriterConfig{
 				IndexIntervalMessages: 100,
 			},
+			ReadAheadSegments: readAhead,
+			CacheEnabled:      true,
 		},
 	}
 }
@@ -145,7 +241,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	store := metadata.NewInMemoryStore(defaultMetadata())
+	store := buildStore(ctx)
 	s3Client := buildS3Client(ctx)
 
 	srv := &broker.Server{
@@ -203,4 +299,32 @@ func defaultMetadata() metadata.ClusterMetadata {
 			},
 		},
 	}
+}
+
+func buildStore(ctx context.Context) metadata.Store {
+	meta := defaultMetadata()
+	endpoints := strings.TrimSpace(os.Getenv("KAFSCALE_ETCD_ENDPOINTS"))
+	if endpoints == "" {
+		return metadata.NewInMemoryStore(meta)
+	}
+	cfg := metadata.EtcdStoreConfig{
+		Endpoints: strings.Split(endpoints, ","),
+		Username:  os.Getenv("KAFSCALE_ETCD_USERNAME"),
+		Password:  os.Getenv("KAFSCALE_ETCD_PASSWORD"),
+	}
+	store, err := metadata.NewEtcdStore(ctx, meta, cfg)
+	if err != nil {
+		log.Printf("failed to init etcd store: %v; falling back to in-memory", err)
+		return metadata.NewInMemoryStore(meta)
+	}
+	log.Printf("using etcd-backed metadata store (%v)", cfg.Endpoints)
+	return store
+}
+func parseEnvInt(name string, fallback int) int {
+	if val := strings.TrimSpace(os.Getenv(name)); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			return parsed
+		}
+	}
+	return fallback
 }

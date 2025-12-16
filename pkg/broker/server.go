@@ -92,6 +92,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 			log.Printf("handle request api=%d err=%v", header.APIKey, err)
 			return
 		}
+		if respPayload == nil {
+			continue
+		}
 		if err := protocol.WriteFrame(conn, respPayload); err != nil {
 			log.Printf("write frame: %v", err)
 			return

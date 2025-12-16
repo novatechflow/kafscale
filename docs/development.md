@@ -49,3 +49,4 @@ make lint    # run golangci-lint (requires installation)
 - No stream processing primitives in the broker—hand those workloads off to Flink/Wayang or equivalent engines
 - Every change must land with unit tests, smoke/integration coverage, and regression tests where appropriate; skipping tests requires an explicit TODO anchored to a tracking issue.
 - Secrets live only in Kubernetes; never write S3 or etcd credentials into source control or etcd. Reference them via `credentialsSecretRef` and let the operator project them at runtime.
+- When testing against etcd locally, set `KAFSCALE_ETCD_ENDPOINTS` (comma-separated), plus `KAFSCALE_ETCD_USERNAME` / `KAFSCALE_ETCD_PASSWORD` if auth is enabled. The broker will fall back to the in-memory store when those vars are absent.

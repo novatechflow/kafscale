@@ -61,6 +61,26 @@ type ProducePartitionResponse struct {
 	LogAppendTimeMs int64
 	LogStartOffset  int64
 }
+
+// FetchResponse represents data returned to consumers.
+type FetchResponse struct {
+	CorrelationID int32
+	ThrottleMs    int32
+	Topics        []FetchTopicResponse
+}
+
+type FetchTopicResponse struct {
+	Name       string
+	Partitions []FetchPartitionResponse
+}
+
+type FetchPartitionResponse struct {
+	Partition     int32
+	ErrorCode     int16
+	HighWatermark int64
+	RecordSet     []byte
+}
+
 // EncodeApiVersionsResponse renders bytes ready to send on the wire.
 func EncodeApiVersionsResponse(resp *ApiVersionsResponse) ([]byte, error) {
 	w := newByteWriter(64)
@@ -128,6 +148,32 @@ func EncodeProduceResponse(resp *ProduceResponse) ([]byte, error) {
 		}
 	}
 	w.Int32(resp.ThrottleMs)
+	return w.Bytes(), nil
+}
+
+// EncodeFetchResponse renders bytes for fetch responses.
+func EncodeFetchResponse(resp *FetchResponse) ([]byte, error) {
+	w := newByteWriter(256)
+	w.Int32(resp.CorrelationID)
+	w.Int32(resp.ThrottleMs)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int32(int32(len(topic.Partitions)))
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			w.Int16(part.ErrorCode)
+			w.Int64(part.HighWatermark)
+			w.Int64(part.HighWatermark) // last stable offset placeholder
+			w.Int32(0)                  // log_start_offset
+			if part.RecordSet == nil {
+				w.Int32(0)
+			} else {
+				w.Int32(int32(len(part.RecordSet)))
+				w.write(part.RecordSet)
+			}
+		}
+	}
 	return w.Bytes(), nil
 }
 

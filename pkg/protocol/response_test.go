@@ -77,3 +77,30 @@ func TestEncodeProduceResponse(t *testing.T) {
 		t.Fatalf("unexpected correlation id %d", corr)
 	}
 }
+
+func TestEncodeFetchResponse(t *testing.T) {
+	payload, err := EncodeFetchResponse(&FetchResponse{
+		CorrelationID: 3,
+		Topics: []FetchTopicResponse{
+			{
+				Name: "orders",
+				Partitions: []FetchPartitionResponse{
+					{
+						Partition:     0,
+						ErrorCode:     0,
+						HighWatermark: 10,
+						RecordSet:     []byte("records"),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeFetchResponse: %v", err)
+	}
+	reader := newByteReader(payload)
+	corr, _ := reader.Int32()
+	if corr != 3 {
+		t.Fatalf("unexpected correlation id %d", corr)
+	}
+}

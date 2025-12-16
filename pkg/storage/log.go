@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sync"
@@ -14,6 +15,8 @@ import (
 type PartitionLogConfig struct {
 	Buffer  WriteBufferConfig
 	Segment SegmentWriterConfig
+	ReadAheadSegments int
+	CacheEnabled      bool
 }
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
@@ -26,25 +29,41 @@ type PartitionLog struct {
 
 	buffer     *WriteBuffer
 	nextOffset int64
-	mu         sync.Mutex
+	onFlush    func(context.Context, *SegmentArtifact)
+	segments   []segmentRange
+	prefetchMu sync.Mutex
+
+	mu sync.Mutex
 }
 
+type segmentRange struct {
+	baseOffset int64
+	lastOffset int64
+}
+
+// ErrOffsetOutOfRange is returned when the requested offset is outside persisted data.
+var ErrOffsetOutOfRange = errors.New("offset out of range")
+
 // NewPartitionLog constructs a log for a topic partition.
-func NewPartitionLog(topic string, partition int32, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig) *PartitionLog {
+func NewPartitionLog(topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact)) *PartitionLog {
 	return &PartitionLog{
-		topic:     topic,
-		partition: partition,
-		s3:        s3Client,
-		cache:     cache,
-		cfg:       cfg,
-		buffer:    NewWriteBuffer(cfg.Buffer),
+		topic:      topic,
+		partition:  partition,
+		s3:         s3Client,
+		cache:      cache,
+		cfg:        cfg,
+		buffer:     NewWriteBuffer(cfg.Buffer),
+		nextOffset: startOffset,
+		onFlush:    onFlush,
+		segments:   make([]segmentRange, 0),
 	}
 }
 
 // AppendBatch writes a record batch to the log, updating offsets and flushing as needed.
 func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*AppendResult, error) {
+	var flushed *SegmentArtifact
+
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	baseOffset := l.nextOffset
 	PatchRecordBatchBaseOffset(&batch, baseOffset)
 	l.nextOffset = baseOffset + int64(batch.LastOffsetDelta) + 1
@@ -55,35 +74,62 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 		LastOffset: l.nextOffset - 1,
 	}
 	if l.buffer.ShouldFlush(time.Now()) {
-		if err := l.flushLocked(ctx); err != nil {
+		var err error
+		flushed, err = l.flushLocked(ctx)
+		if err != nil {
+			l.mu.Unlock()
 			return nil, err
 		}
+	}
+	l.mu.Unlock()
+
+	if flushed != nil && l.onFlush != nil {
+		l.onFlush(ctx, flushed)
 	}
 	return result, nil
 }
 
-func (l *PartitionLog) flushLocked(ctx context.Context) error {
+// Flush forces buffered batches to be written to S3 immediately.
+func (l *PartitionLog) Flush(ctx context.Context) error {
+	l.mu.Lock()
+	artifact, err := l.flushLocked(ctx)
+	l.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if artifact != nil && l.onFlush != nil {
+		l.onFlush(ctx, artifact)
+	}
+	return nil
+}
+
+func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error) {
 	batches := l.buffer.Drain()
 	if len(batches) == 0 {
-		return nil
+		return nil, nil
 	}
 	artifact, err := BuildSegment(l.cfg.Segment, batches, time.Now())
 	if err != nil {
-		return fmt.Errorf("build segment: %w", err)
+		return nil, fmt.Errorf("build segment: %w", err)
 	}
 	segmentKey := l.segmentKey(artifact.BaseOffset)
 	indexKey := l.indexKey(artifact.BaseOffset)
 
 	if err := l.s3.UploadSegment(ctx, segmentKey, artifact.SegmentBytes); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.s3.UploadIndex(ctx, indexKey, artifact.IndexBytes); err != nil {
-		return err
+		return nil, err
 	}
 	if l.cache != nil {
 		l.cache.SetSegment(l.topic, l.partition, artifact.BaseOffset, artifact.SegmentBytes)
 	}
-	return nil
+	l.segments = append(l.segments, segmentRange{
+		baseOffset: artifact.BaseOffset,
+		lastOffset: artifact.LastOffset,
+	})
+	l.startPrefetch(ctx, len(l.segments)-1)
+	return artifact, nil
 }
 
 func (l *PartitionLog) segmentKey(baseOffset int64) string {
@@ -98,4 +144,80 @@ func (l *PartitionLog) indexKey(baseOffset int64) string {
 type AppendResult struct {
 	BaseOffset int64
 	LastOffset int64
+}
+
+// Read loads the segment containing the requested offset.
+func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) ([]byte, error) {
+	l.mu.Lock()
+	var seg segmentRange
+	found := false
+	for _, s := range l.segments {
+		if offset >= s.baseOffset && offset <= s.lastOffset {
+			seg = s
+			found = true
+			break
+		}
+	}
+	l.mu.Unlock()
+
+	if !found {
+		return nil, ErrOffsetOutOfRange
+	}
+
+	data, ok := l.cache.GetSegment(l.topic, l.partition, seg.baseOffset)
+	if !ok {
+		bytes, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), nil)
+		if err != nil {
+			return nil, err
+		}
+		data = bytes
+		if l.cache != nil && l.cfg.CacheEnabled {
+			l.cache.SetSegment(l.topic, l.partition, seg.baseOffset, data)
+		}
+	}
+	l.startPrefetch(ctx, l.segmentIndex(seg.baseOffset)+1)
+
+	result := append([]byte(nil), data...)
+	if maxBytes > 0 && len(result) > int(maxBytes) {
+		result = result[:maxBytes]
+	}
+	return result, nil
+}
+
+func (l *PartitionLog) segmentIndex(baseOffset int64) int {
+	for i, seg := range l.segments {
+		if seg.baseOffset == baseOffset {
+			return i
+		}
+	}
+	return -1
+}
+
+func (l *PartitionLog) startPrefetch(ctx context.Context, nextIndex int) {
+	if l.cfg.ReadAheadSegments <= 0 || nextIndex < 0 {
+		return
+	}
+	l.prefetchMu.Lock()
+	defer l.prefetchMu.Unlock()
+	for i := 0; i < l.cfg.ReadAheadSegments; i++ {
+		idx := nextIndex + i
+		if idx >= len(l.segments) {
+			break
+		}
+		seg := l.segments[idx]
+		if l.cache != nil {
+			if _, ok := l.cache.GetSegment(l.topic, l.partition, seg.baseOffset); ok {
+				continue
+			}
+		}
+		go func(seg segmentRange) {
+			data, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), nil)
+			if err != nil {
+				return
+			}
+			if l.cache != nil && l.cfg.CacheEnabled {
+				l.cache.SetSegment(l.topic, l.partition, seg.baseOffset, data)
+			}
+		}(seg)
+	}
 }

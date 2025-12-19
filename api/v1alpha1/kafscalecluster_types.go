@@ -27,6 +27,8 @@ type BrokerResources struct {
 type S3Spec struct {
 	Bucket               string `json:"bucket"`
 	Region               string `json:"region"`
+	Endpoint             string `json:"endpoint,omitempty"`
+	KMSKeyARN            string `json:"kmsKeyArn,omitempty"`
 	CredentialsSecretRef string `json:"credentialsSecretRef"`
 }
 

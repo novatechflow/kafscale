@@ -38,6 +38,7 @@ coverage*.out
 # Environment/config
 .env
 .env.*
+commercial-saas.md
 secrets/*.yaml
 secrets/*.json
 

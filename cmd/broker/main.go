@@ -225,13 +225,13 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 		}
 		partitionResponses := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
-			if h.s3Health.State() == broker.S3StateUnavailable {
+			if h.s3Health.State() != broker.S3StateHealthy {
 				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
 					Partition: part.Partition,
-					ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
+					ErrorCode: h.backpressureErrorCode(),
 				})
 				if h.traceKafka {
-					h.logger.Debug("produce rejected due to unavailable S3", "topic", topic.Name, "partition", part.Partition)
+					h.logger.Debug("produce rejected due to S3 health", "topic", topic.Name, "partition", part.Partition, "s3_state", h.s3Health.State())
 				}
 				continue
 			}

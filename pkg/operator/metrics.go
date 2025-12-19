@@ -19,10 +19,43 @@ var (
 		Name: "kafscale_operator_snapshot_publish_total",
 		Help: "Count of metadata snapshot publish attempts labeled by result.",
 	}, []string{"result"})
+	operatorEtcdSnapshotAge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_age_seconds",
+		Help: "Seconds since the last successful etcd snapshot upload.",
+	}, []string{"cluster"})
+	operatorEtcdSnapshotLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_last_success_timestamp",
+		Help: "Unix timestamp of the last successful etcd snapshot upload.",
+	}, []string{"cluster"})
+	operatorEtcdSnapshotLastSchedule = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_last_schedule_timestamp",
+		Help: "Unix timestamp of the last scheduled etcd snapshot job.",
+	}, []string{"cluster"})
+	operatorEtcdSnapshotStale = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_stale",
+		Help: "1 if the last snapshot is older than the staleness threshold.",
+	}, []string{"cluster"})
+	operatorEtcdSnapshotSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_success",
+		Help: "1 if at least one successful etcd snapshot has been recorded.",
+	}, []string{"cluster"})
+	operatorEtcdSnapshotAccessOK = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_access_ok",
+		Help: "1 if the operator can write to the snapshot bucket.",
+	}, []string{"cluster"})
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(operatorClusters, operatorSnapshotResults)
+	ctrlmetrics.Registry.MustRegister(
+		operatorClusters,
+		operatorSnapshotResults,
+		operatorEtcdSnapshotAge,
+		operatorEtcdSnapshotLastSuccess,
+		operatorEtcdSnapshotLastSchedule,
+		operatorEtcdSnapshotStale,
+		operatorEtcdSnapshotSuccess,
+		operatorEtcdSnapshotAccessOK,
+	)
 }
 
 func recordClusterCount(ctx context.Context, c client.Client) {

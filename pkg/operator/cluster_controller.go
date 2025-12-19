@@ -9,6 +9,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -50,7 +51,16 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcileBrokerDeployment(ctx, &cluster); err != nil {
+	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
+		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", err.Error())
+		return ctrl.Result{}, err
+	}
+	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
+	if err := r.reconcileBrokerDeployment(ctx, &cluster, etcdResolution.Endpoints); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
@@ -59,7 +69,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.reconcileBrokerHPA(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.Publisher.Publish(ctx, &cluster); err != nil {
+	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.updateStatus(ctx, &cluster, metav1.ConditionTrue, "Ready", "Reconciled"); err != nil {
@@ -77,7 +87,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -96,19 +106,19 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Template.ObjectMeta.Labels = labels
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
-			r.brokerContainer(cluster),
+			r.brokerContainer(cluster, endpoints),
 		}
 		return controllerutil.SetControllerReference(cluster, deploy, r.Scheme)
 	})
 	return err
 }
 
-func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster) corev1.Container {
+func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := brokerImage
 	env := []corev1.EnvVar{
 		{Name: "KAFSCALE_S3_BUCKET", Value: cluster.Spec.S3.Bucket},
 		{Name: "KAFSCALE_S3_REGION", Value: cluster.Spec.S3.Region},
-		{Name: "KAFSCALE_ETCD_ENDPOINTS", Value: strings.Join(cluster.Spec.Etcd.Endpoints, ",")},
+		{Name: "KAFSCALE_ETCD_ENDPOINTS", Value: strings.Join(endpoints, ",")},
 	}
 	if cluster.Spec.Config.SegmentBytes > 0 {
 		env = append(env, corev1.EnvVar{
@@ -129,10 +139,10 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		})
 	}
 	var envFrom []corev1.EnvFromSource
-	if cluster.Spec.S3.CredentialsSecret != "" {
+	if cluster.Spec.S3.CredentialsSecretRef != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecret},
+				LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},
 				Optional:             boolPtr(true),
 			},
 		})
@@ -240,6 +250,95 @@ func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev
 	}
 	recordClusterCount(ctx, r.Client)
 	return nil
+}
+
+func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+	clusterKey := cluster.Namespace + "/" + cluster.Name
+	now := time.Now()
+	if !resolution.Managed {
+		operatorEtcdSnapshotAge.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotLastSuccess.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotLastSchedule.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotSuccess.WithLabelValues(clusterKey).Set(0)
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdSnapshot",
+			Status:             metav1.ConditionFalse,
+			Reason:             "SnapshotNotManaged",
+			Message:            "Etcd snapshots are managed externally.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	cron := &batchv1.CronJob{}
+	cronKey := client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-etcd-snapshot", cluster.Name)}
+	if err := r.Client.Get(ctx, cronKey, cron); err != nil {
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdSnapshot",
+			Status:             metav1.ConditionFalse,
+			Reason:             "SnapshotCronMissing",
+			Message:            "Etcd snapshot CronJob is missing.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	var lastSchedule time.Time
+	if cron.Status.LastScheduleTime != nil {
+		lastSchedule = cron.Status.LastScheduleTime.Time
+		operatorEtcdSnapshotLastSchedule.WithLabelValues(clusterKey).Set(float64(lastSchedule.Unix()))
+	} else {
+		operatorEtcdSnapshotLastSchedule.WithLabelValues(clusterKey).Set(0)
+	}
+
+	if cron.Status.LastSuccessfulTime == nil {
+		operatorEtcdSnapshotAge.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotLastSuccess.WithLabelValues(clusterKey).Set(0)
+		operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(1)
+		operatorEtcdSnapshotSuccess.WithLabelValues(clusterKey).Set(0)
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdSnapshot",
+			Status:             metav1.ConditionFalse,
+			Reason:             "SnapshotNeverSucceeded",
+			Message:            "No successful etcd snapshots recorded yet.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	lastSuccess := cron.Status.LastSuccessfulTime.Time
+	operatorEtcdSnapshotLastSuccess.WithLabelValues(clusterKey).Set(float64(lastSuccess.Unix()))
+	age := now.Sub(lastSuccess)
+	operatorEtcdSnapshotAge.WithLabelValues(clusterKey).Set(age.Seconds())
+	operatorEtcdSnapshotSuccess.WithLabelValues(clusterKey).Set(1)
+
+	staleAfter := time.Duration(snapshotStaleAfterSeconds()) * time.Second
+	stale := age > staleAfter
+	if stale {
+		operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(1)
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdSnapshot",
+			Status:             metav1.ConditionFalse,
+			Reason:             "SnapshotStale",
+			Message:            fmt.Sprintf("Last snapshot %s ago (threshold %s).", age.Round(time.Second), staleAfter),
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(0)
+	message := fmt.Sprintf("Last snapshot %s ago.", age.Round(time.Second))
+	if !lastSchedule.IsZero() {
+		message = fmt.Sprintf("%s Last scheduled %s ago.", message, now.Sub(lastSchedule).Round(time.Second))
+	}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "EtcdSnapshot",
+		Status:             metav1.ConditionTrue,
+		Reason:             "SnapshotHealthy",
+		Message:            message,
+		LastTransitionTime: metav1.NewTime(now),
+	})
 }
 
 func setClusterCondition(conditions *[]metav1.Condition, condition metav1.Condition) {

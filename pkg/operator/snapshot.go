@@ -26,7 +26,7 @@ func NewSnapshotPublisher(c client.Client) *SnapshotPublisher {
 }
 
 // Publish renders the current metadata for the supplied cluster and puts it into etcd.
-func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
 	var topicList kafscalev1alpha1.KafscaleTopicList
 	if err := p.Client.List(ctx, &topicList, client.InNamespace(cluster.Namespace)); err != nil {
 		operatorSnapshotResults.WithLabelValues("error").Inc()
@@ -39,7 +39,7 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 		}
 	}
 	meta := BuildClusterMetadata(cluster, topics)
-	if err := PublishMetadataSnapshot(ctx, cluster.Spec.Etcd.Endpoints, meta); err != nil {
+	if err := PublishMetadataSnapshot(ctx, endpoints, meta); err != nil {
 		operatorSnapshotResults.WithLabelValues("error").Inc()
 		return err
 	}

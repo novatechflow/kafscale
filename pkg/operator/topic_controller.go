@@ -50,7 +50,11 @@ func (r *TopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Status().Update(ctx, &topic); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
-	if err := r.Publisher.Publish(ctx, &cluster); err != nil {
+	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil

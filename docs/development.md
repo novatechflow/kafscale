@@ -40,9 +40,14 @@ make test         # run go test ./...
 make docker-build # build broker/operator/console images (run locally whenever their code changes; CI builds on release tags)
 make test-e2e         # run the minio/franz + operator e2e suites (images from docker-build are reused)
 make test-e2e-debug   # same as above but with broker trace logging enabled
+KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestOperatorManagedEtcdResources -v # operator envtest (no kind)
+KAFSCALE_E2E=1 KAFSCALE_E2E_KIND=1 go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v # kind + helm integration
 make docker-clean # delete dev images and prune Docker caches when you need a fresh slate
 make stop-containers # stop leftover kafscale-minio/kind containers from previous e2e runs
+make help         # list available Makefile targets
+```
 
+The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-containers`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-e2e`, `test-e2e-debug`, `demo`, `help`.
 ## Kafka Compatibility Tracking
 
 To stay Kafka-compatible we track every protocol key + version that upstream exposes. Upstream Kafka 3.7.0 currently advertises the following highest ApiVersions (see `kafka-protocol` docs):
@@ -105,10 +110,13 @@ Need an interactive run? `make demo` chains into the same helpers, boots embedde
 
 The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fetch_rps`) so the UI can show messages-per-second alongside S3 latency. The sliding window defaults to 60 seconds; override it with `KAFSCALE_THROUGHPUT_WINDOW_SEC` before starting the broker if you want a shorter (spikier) or longer (smoother) view.
 
+### Operator envtest (no kind)
+
+`TestOperatorManagedEtcdResources` uses controller-runtime envtest to validate operator reconciliation without spinning up kind. Install envtest assets with `setup-envtest` or set `KUBEBUILDER_ASSETS` to a directory containing `kube-apiserver` and `etcd` binaries.
+
 ### Broker logging levels
 
 The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we operate in warning-and-above mode, which keeps regular e2e/test runs quiet. Set `KAFSCALE_LOG_LEVEL=info` or `debug` (optionally together with `KAFSCALE_TRACE_KAFKA=true`) when you need additional visibility; the `test-e2e-debug` target wires those env vars up for you.
-```
 
 ## Coding Standards
 

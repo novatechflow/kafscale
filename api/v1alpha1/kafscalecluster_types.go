@@ -25,9 +25,9 @@ type BrokerResources struct {
 }
 
 type S3Spec struct {
-	Bucket            string `json:"bucket"`
-	Region            string `json:"region"`
-	CredentialsSecret string `json:"credentialsSecret"`
+	Bucket               string `json:"bucket"`
+	Region               string `json:"region"`
+	CredentialsSecretRef string `json:"credentialsSecretRef"`
 }
 
 type EtcdSpec struct {

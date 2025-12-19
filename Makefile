@@ -1,4 +1,4 @@
-.PHONY: proto build test tidy lint generate docker-build docker-build-broker docker-build-operator docker-build-console docker-containers ensure-minio start-minio stop-containers test-e2e test-e2e-debug
+.PHONY: proto build test tidy lint generate docker-build docker-build-broker docker-build-operator docker-build-console docker-containers docker-clean ensure-minio start-minio stop-containers release-broker-ports test-e2e test-e2e-debug demo help
 
 REGISTRY ?= ghcr.io/novatechflow
 BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev

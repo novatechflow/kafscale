@@ -56,6 +56,41 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
 - **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
+## etcd Availability & Storage
+
+Kafscale depends on etcd for metadata + offsets. Treat etcd as a production datastore:
+
+- Run a dedicated etcd cluster (do not share the Kubernetes control-plane etcd).
+- Use SSD-backed disks for data and WAL volumes; avoid networked storage when possible.
+- Deploy an odd number of members (3 for most clusters, 5 for higher fault tolerance).
+- Spread members across zones/racks to survive single-AZ failures.
+- Enable compaction/defragmentation and monitor fsync/proposal latency.
+
+### Operator-managed etcd (default path)
+
+If no etcd endpoints are supplied, the operator will provision a 3-node etcd StatefulSet for you. Recommended settings:
+
+- Use an SSD-capable StorageClass for the etcd PVCs (`storageClassName`), with enough IOPS headroom.
+- Set a PodDisruptionBudget so only one etcd pod can be evicted at a time.
+- Pin etcd pods across zones with topology spread or anti-affinity.
+- Enable snapshot backups to a dedicated S3 bucket and retain at least 7 days of snapshots.
+- Monitor leader changes, fsync latency, and disk usage; alert on slow or flapping members.
+
+Snapshot job defaults and operator env overrides:
+
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: cluster S3 bucket)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `quay.io/coreos/etcd:v3.5.12`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` (optional, set to `1` to auto-create the backup bucket)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` (optional, set to `1` to enable versioning + block public access)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` (optional, set to `1` to skip the operator S3 write check)
+
+The operator performs an S3 write preflight before enabling snapshots. If the check fails, the `EtcdSnapshotAccess` condition is set to `False` and reconciliation returns an error until access is restored. Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
+
 ## Upgrades & Rollbacks
 
 - Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.

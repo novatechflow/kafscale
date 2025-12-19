@@ -1739,7 +1739,7 @@ spec:
                       default: "us-east-1"
                     endpoint:
                       type: string
-                    credentialsSecret:
+                    credentialsSecretRef:
                       type: string
                 etcd:
                   type: object
@@ -1877,7 +1877,7 @@ spec:
   s3:
     bucket: kafscale-production-data
     region: eu-west-1
-    credentialsSecret: kafscale-s3-credentials
+    credentialsSecretRef: kafscale-s3-credentials
   
   etcd:
     endpoints:
@@ -2304,6 +2304,17 @@ logging:
   format: "json"                  # json, text
 ```
 
+### Operator etcd Resolution
+
+- `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` (comma-separated list)
+
+The operator resolves etcd endpoints in this order:
+1) Use the endpoints declared in `KafscaleCluster.spec.etcd.endpoints`.
+2) If unset, fall back to `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`.
+3) If still empty, the operator deploys a dedicated 3-node etcd StatefulSet (HA with leader election) and wires the service DNS into the cluster spec.
+
+Disaster recovery: configure an etcd snapshot schedule that uploads backups to a dedicated S3 bucket. The operator should surface the snapshot status and most recent backup timestamp in its status/metrics.
+
 ### Environment Variable Overrides
 
 ```bash
@@ -2331,6 +2342,8 @@ KAFSCALE_LOG_LEVEL
 - `KAFSCALE_UI_PASSWORD`
 
 The React SPA always renders a login screen inspired by MinIO’s aesthetic. Credentials are sourced exclusively from these environment variables—there are no baked-in defaults. If either variable is unset, the login form instead shows an inline warning that UI access is disabled until both values are configured, preventing accidental deployments that rely on hard-coded passwords. The API/auth middleware reads the same variables and rejects every login attempt until they are provided, keeping the UX and backend behavior in sync.
+
+Status: Done (console login + env-gated auth enforced).
 
 ---
 
@@ -2444,6 +2457,10 @@ func isRetryableS3Error(err error) bool {
     return false
 }
 ```
+
+### S3 Health Gating
+
+When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with backpressure error codes (no buffering). Producers receive a failure response immediately so clients can retry; consumers receive fetch errors until S3 recovers. This preserves the “S3 is source of truth” durability contract.
 
 ---
 
@@ -2775,6 +2792,10 @@ ENTRYPOINT ["./broker"]
 - [ ] Health endpoints
 - [ ] Grafana dashboard templates
 
+### Milestone 8.5: Console UI Access
+
+- [x] UI login screen with env-gated auth (no defaults)
+
 ### Milestone 9: Testing & Hardening
 
 - [ ] Integration test suite
@@ -2788,6 +2809,21 @@ ENTRYPOINT ["./broker"]
 - [ ] Documentation
 - [ ] CI/CD pipeline
 - [ ] Security review (TLS, auth)
+
+### Gap Backlog (Validated)
+
+- [ ] Rebuild partition logs on broker restart by listing S3 segments + loading indexes
+- [ ] Align fetch request support with v13 (spec) or update spec to v11
+- [ ] Align S3 key layout with namespace support and use index-based range reads
+- [ ] Persist consumer group metadata (not just offsets) in etcd or document in-memory limitations
+- [ ] Define etcd HA requirements (dedicated cluster, SSD storage, odd quorum) and reflect in ops docs
+- [ ] Honor `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` when cluster spec omits endpoints
+- [ ] Auto-provision a 3-node etcd StatefulSet when no endpoints are configured
+- [ ] Add etcd snapshot backups to S3 + surface snapshot status
+- [ ] Decide on etcd schema (snapshot vs per-key) and implement broker registrations/assignments if needed
+- [ ] Fix env var mismatches (`KAFSCALE_CACHE_SIZE` vs `KAFSCALE_CACHE_BYTES`, segment/flush vars)
+- [ ] Implement Milestone 6.5 Ops APIs (DescribeGroups/ListGroups/OffsetForLeaderEpoch/DescribeConfigs/AlterConfigs/CreatePartitions)
+- [ ] Expand Prometheus metrics to match observability spec
 
 ## Appendix A: Kafka Protocol Wire Format Reference
 

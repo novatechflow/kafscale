@@ -1,6 +1,6 @@
 # Development Guide
 
-This document tracks the steps needed to work on Kafscale. It complements the architecture spec in `kscale-spec.md`.
+This document tracks the steps needed to work on Kafscale. It complements the architecture spec in `kafscale-spec.md`.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ This document tracks the steps needed to work on Kafscale. It complements the ar
 - `test/`: integration + e2e suites
 - `docs/storage.md`: deeper design notes for the storage subsystem, including S3 client expectations
 
-Refer to `kscale-spec.md` for the detailed package-by-package breakdown.
+Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 
 ## Generating Protobuf Code
 
@@ -50,6 +50,14 @@ make stop-containers # stop leftover kafscale-minio/kind containers from previou
 make help         # list available Makefile targets
 ```
 
+## Contribution and Testing Expectations
+
+Pull requests must include strict test coverage for the changes they introduce. At a minimum:
+
+- Add or extend unit tests for all non-trivial logic.
+- Run the relevant e2e suite(s); changes to broker behavior should run `make test-produce-consume` and any related e2e tests.
+- Extend e2e coverage when you fix bugs so regressions are caught earlier.
+
 The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-build-e2e-client`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-produce-consume`, `test-produce-consume-debug`, `test-consumer-group`, `test-operator`, `demo`, `demo-platform`, `help`.
 
 ### Development/Test Environment Variables
@@ -73,7 +81,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 |---------|------|-------------------|-----------------|
 | 0 | Produce | 9 | ✅ Implemented |
 | 1 | Fetch | 13 | ✅ Implemented |
-| 2 | ListOffsets | 7 | ✅ Implemented |
+| 2 | ListOffsets | 7 | ✅ Implemented (v0 only) |
 | 3 | Metadata | 12 | ✅ Implemented |
 | 4 | LeaderAndIsr | 5 | ❌ Not needed (internal) |
 | 5 | StopReplica | 3 | ❌ Not needed (internal) |
@@ -89,9 +97,9 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 15 | DescribeGroups | 5 | 🔜 Planned |
 | 16 | ListGroups | 5 | 🔜 Planned |
 | 17 | SaslHandshake | 1 | ❌ Authentication not in scope yet |
-| 18 | ApiVersions | 3 | ✅ Implemented |
-| 19 | CreateTopics | 7 | ✅ Implemented |
-| 20 | DeleteTopics | 6 | ✅ Implemented |
+| 18 | ApiVersions | 3 | ✅ Implemented (v0 only) |
+| 19 | CreateTopics | 7 | ✅ Implemented (v0 only) |
+| 20 | DeleteTopics | 6 | ✅ Implemented (v0 only) |
 | 21 | DeleteRecords | 2 | ❌ Rely on S3 lifecycle |
 | 22 | InitProducerId | 4 | ❌ Transactions out of scope |
 | 23 | OffsetForLeaderEpoch | 3 | 🔜 Needed for catch-up tooling |
@@ -103,8 +111,8 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 29 | DescribeAcls | 1 | ❌ Auth not in v1 |
 | 30 | CreateAcls | 1 | ❌ Auth not in v1 |
 | 31 | DeleteAcls | 1 | ❌ Auth not in v1 |
-| 32 | DescribeConfigs | 4 | ⚠️ Read-only subset |
-| 33 | AlterConfigs | 1 | 🔜 After admin API hardening |
+| 32 | DescribeConfigs | 4 | 🔜 Planned |
+| 33 | AlterConfigs | 1 | 🔜 Planned |
 | 34 | AlterReplicaLogDirs | 1 | ❌ Not relevant (S3 backed) |
 | 35 | DescribeLogDirs | 1 | ❌ Not relevant (S3 backed) |
 | 36 | SaslAuthenticate | 2 | ❌ Auth not in v1 |
@@ -113,7 +121,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 39 | RenewDelegationToken | 2 | ❌ Auth not in v1 |
 | 40 | ExpireDelegationToken | 2 | ❌ Auth not in v1 |
 | 41 | DescribeDelegationToken | 2 | ❌ Auth not in v1 |
-| 42 | DeleteGroups | 2 | ✅ Implemented |
+| 42 | DeleteGroups | 2 | 🔜 Planned |
 
 We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer in the spec backlog so we can track when to bring it online (e.g., DescribeGroups/ListGroups for Kafka UI parity, OffsetForLeaderEpoch for catch-up tooling).
 make tidy         # clean go.mod/go.sum
@@ -137,7 +145,7 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 
 ## Coding Standards
 
-- Keep all new code documented in `kscale-spec.md` or cross-link back to the spec
+- Keep all new code documented in `kafscale-spec.md` or cross-link back to the spec
 - Favor context-rich structured logging (zerolog) and Prometheus metrics
 - Protobufs should remain backward compatible; prefer adding optional fields over rewriting existing ones
 - No stream processing primitives in the broker—hand those workloads off to Flink/Wayang or equivalent engines

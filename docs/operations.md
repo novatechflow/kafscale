@@ -76,6 +76,18 @@ If no etcd endpoints are supplied, the operator will provision a 3-node etcd Sta
 - Enable snapshot backups to a dedicated S3 bucket and retain at least 7 days of snapshots.
 - Monitor leader changes, fsync latency, and disk usage; alert on slow or flapping members.
 
+### Etcd Endpoint Resolution
+
+The operator resolves etcd endpoints in this order:
+
+1. `KafscaleCluster.spec.etcd.endpoints`
+2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
+3. Managed etcd (operator creates a 3-node StatefulSet)
+
+### Etcd Schema Direction
+
+Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
+
 Snapshot job defaults and operator env overrides:
 
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: cluster S3 bucket)
@@ -167,3 +179,22 @@ Recommended operator alerting (when using Prometheus Operator):
 - Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
 - CRD schema changes follow Kubernetes best practices; run `helm upgrade` to pick them up.
 - Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
+
+## S3 Cost Estimation (Example)
+
+Assumptions:
+
+- 100 GB/day ingestion
+- 7-day retention
+- 4 MB average segment size
+- 3 broker pods
+
+Monthly costs (US-East-1):
+
+| Item | Calculation | Cost |
+|------|-------------|------|
+| Storage | 700 GB x $0.023/GB | $16.10 |
+| PUT requests | 25,000/day x 30 x $0.005/1000 | $3.75 |
+| GET requests | 100,000/day x 30 x $0.0004/1000 | $1.20 |
+| Data transfer (in-region) | Free | $0 |
+| **Total S3** | | **~$21/month** |

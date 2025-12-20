@@ -88,4 +88,4 @@ Kafscale keeps topic/partition metadata and persisted offsets in etcd. The opera
 - No embedded stream processing features—pair Kafscale with Flink, Wayang, Spark, etc.
 - Transactions, idempotent producers, and log compaction are out of scope for the MVP.
 
-For deeper architectural details or development guidance, read `kscale-spec.md` and `docs/development.md`.
+For deeper architectural details or development guidance, read `kafscale-spec.md` and `docs/development.md`.

@@ -15,7 +15,7 @@ Kafscale is a Kubernetes-native, S3-backed Kafka-compatible streaming platform f
 - S3 stores immutable log segments and index files.
 - etcd stores metadata, offsets, and consumer group state.
 
-For deeper design details and architecture diagrams, see `kscale-spec.md`.
+For deeper design details and architecture diagrams, see `kafscale-spec.md`.
 
 ## Kafka Protocol Support (Broker-Advertised)
 
@@ -46,7 +46,7 @@ Explicitly unsupported:
 
 ## Quickstart
 
-See `docs/user-guide.md` for deployment and usage, and `docs/development.md` for developer workflows.
+See `docs/quickstart.md` for installation, `docs/user-guide.md` for runtime behavior, and `docs/development.md` for developer workflows.
 
 Common local commands:
 
@@ -59,7 +59,12 @@ make test-consumer-group
 
 ## Documentation Map
 
-- `kafscale-spec.md` - architecture overview, protocol coverage, roadmap
+- `kafscale-spec.md` - technical specification (architecture + data formats)
+- `docs/overview.md` - product overview and non-goals
+- `docs/quickstart.md` - install the operator and create your first cluster
+- `docs/architecture.md` - component responsibilities and data flow
+- `docs/protocol.md` - Kafka protocol support matrix
+- `docs/roadmap.md` - completed work and open gaps
 - `docs/user-guide.md` - running the platform
 - `docs/development.md` - dev workflow and test targets
 - `docs/operations.md` - ops guidance and etcd/S3 requirements

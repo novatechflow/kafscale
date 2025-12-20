@@ -8,7 +8,7 @@ description: Common questions about Kafscale, Kafka compatibility, and S3 durabi
 
 ## How does this compare to WarpStream/Redpanda/MSK?
 
-See `/comparison.html` for a detailed side-by-side comparison.
+See `/comparison/` for a detailed side-by-side comparison.
 
 ## What latency should I expect?
 

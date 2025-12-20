@@ -116,6 +116,12 @@ a:hover {
   align-items: center;
 }
 
+[data-theme="dark"] .theme-toggle {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #f8fafc;
+}
+
 .theme-toggle .sun,
 .theme-toggle .moon {
   font-family: var(--font-display);
@@ -324,6 +330,125 @@ a:hover {
   background: var(--bg-alt);
 }
 
+.comparison {
+  margin-top: 2rem;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 0.85rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 0.95rem;
+}
+
+.comparison-table thead {
+  background: rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="dark"] .comparison-table thead {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.comparison-table .highlight {
+  background: rgba(14, 165, 233, 0.1);
+}
+
+.comparison-table .section-row td {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="dark"] .comparison-table .section-row td {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.badge {
+  display: inline-flex;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-success {
+  background: rgba(34, 197, 94, 0.16);
+  color: #16a34a;
+}
+
+.badge-warning {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.badge-danger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #dc2626;
+}
+
+.badge-neutral {
+  background: rgba(148, 163, 184, 0.2);
+  color: #64748b;
+}
+
+.mobile-cards {
+  display: none;
+  margin-top: 1.5rem;
+}
+
+.product-card {
+  background: var(--panel);
+  border-radius: 16px;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  margin-bottom: 1.25rem;
+}
+
+.product-card.highlight {
+  border-color: var(--accent);
+}
+
+.product-card h3 {
+  margin-top: 0;
+  font-family: var(--font-display);
+}
+
+.product-card .tagline {
+  color: var(--muted);
+  margin-bottom: 1rem;
+}
+
+.spec-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.spec-row:last-child {
+  border-bottom: none;
+}
+
+.spec-label {
+  color: var(--muted);
+}
+
 .footer-badges img {
   max-height: 36px;
   filter: grayscale(1);
@@ -358,5 +483,13 @@ a:hover {
 
   .doc-sidebar {
     position: static;
+  }
+
+  .comparison-table {
+    display: none;
+  }
+
+  .mobile-cards {
+    display: block;
   }
 }

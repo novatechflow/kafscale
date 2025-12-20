@@ -1,8 +1,10 @@
 title: Kafscale
 email: hello@kafscale.io
 description: Kafka-compatible streaming with stateless brokers, S3-native storage, and Kubernetes-first operations.
-url: ""
+url: "https://kafscale.io"
 baseurl: ""
+og_image: /assets/img/og-kafscale.svg
+og_image_alt: "Kafscale stateless Kafka on S3"
 markdown: kramdown
 permalink: pretty
 kramdown:

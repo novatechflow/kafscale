@@ -18,7 +18,6 @@ limitations under the License.
 # Kafscale
 
 [![CI](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml)
-[![Coverage Gate](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml/badge.svg?branch=main&label=coverage%20gate)](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml)
 [![Codecov](https://codecov.io/gh/novatechflow/kafscale/branch/main/graph/badge.svg)](https://codecov.io/gh/novatechflow/kafscale)
 [![CodeQL](https://github.com/novatechflow/kafscale/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/novatechflow/kafscale/badge)](https://securityscorecards.dev/viewer/?uri=github.com/novatechflow/kafscale)
@@ -27,7 +26,7 @@ limitations under the License.
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/novatechflow/kafscale)](https://goreportcard.com/report/github.com/novatechflow/kafscale)
 
-Kafscale™ is a Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
+Kafscale™ is a Apache Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
 
 ## Why Kafscale Exists
 
@@ -52,7 +51,7 @@ Explicit non-goals:
 - Kafka internal replication protocols
 - Embedded stream processing inside the broker
 
-Stream processing is expected to run in external compute engines such as Apache Flink or Apache Wayang.
+Stream processing is expected to run in external compute engines such as Apache Flink (https://flink.apache.org) or Apache Wayang (https://wayang.apache.org).
 
 ## Architecture at a Glance
 

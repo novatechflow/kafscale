@@ -35,6 +35,7 @@ permissions:
 jobs:
   analysis:
     runs-on: ubuntu-latest
+    if: ${{ github.event.repository.private == false }}
     steps:
       - uses: actions/checkout@v4
         with:

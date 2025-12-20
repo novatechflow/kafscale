@@ -1,21 +1,56 @@
+<!--
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Kafscale
 
-Kafscale is a Kubernetes-native, S3-backed Kafka-compatible streaming platform focused on durable message delivery without the operational overhead of a full Kafka cluster.
+Kafscale™ is a Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
 
-## Why Kafscale
+## Why Kafscale Exists
 
-- Stateless brokers with S3 as the source of truth.
-- Kafka protocol support for the common 80% of producer/consumer workflows.
-- etcd-backed metadata and consumer offsets (plus group metadata persistence).
-- Designed for Kubernetes scale-out and predictable operations.
+Most Kafka deployments act as durable pipes: producers write, consumers read, teams rely on replay when something breaks. Very few workloads require sub-millisecond latency, exactly-once transactions, or compacted topics, yet traditional Kafka clusters still demand stateful brokers, disk management, and continuous operational effort.
+
+Kafscale targets the common case by keeping brokers stateless and putting durability in S3 while remaining compatible with existing Kafka clients and tooling.
+
+Kafscale is used in production environments, but there are no warranties or guarantees.
+
+## Design Scope
+
+In scope:
+- Kafka wire protocol for core produce, fetch, and consumer group APIs
+- Immutable S3-backed segment storage
+- Stateless broker pods
+- etcd-backed metadata, offsets, and consumer group state
+- Kubernetes-native operation via the operator
+
+Explicit non-goals:
+- Exactly-once semantics and transactions
+- Compacted topics
+- Kafka internal replication protocols
+- Embedded stream processing inside the broker
+
+Stream processing is expected to run in external compute engines such as Apache Flink or Apache Wayang.
 
 ## Architecture at a Glance
 
 - Brokers handle Kafka protocol traffic and buffer segments in memory.
-- S3 stores immutable log segments and index files.
+- S3 stores immutable log segments and index files (source of truth).
 - etcd stores metadata, offsets, and consumer group state.
 
-For deeper design details and architecture diagrams, see `kafscale-spec.md`.
+For the technical specification and data formats, see `kafscale-spec.md`.
 
 ## Kafka Protocol Support (Broker-Advertised)
 
@@ -69,3 +104,13 @@ make test-consumer-group
 - `docs/development.md` - dev workflow and test targets
 - `docs/operations.md` - ops guidance and etcd/S3 requirements
 - `docs/storage.md` - S3 layout and segment/index details
+
+A detailed architecture overview and design rationale are available here:
+https://www.novatechflow.com/p/kafscale.html
+
+## Community
+
+- License: Apache 2.0 (`LICENSE`)
+- Contributing: `CONTRIBUTING.md`
+- Code of Conduct: `CODE_OF_CONDUCT.md`
+- Security: `SECURITY.md`

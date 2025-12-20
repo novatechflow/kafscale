@@ -114,6 +114,7 @@ make test-consumer-group
 - `docs/development.md` - dev workflow and test targets
 - `docs/operations.md` - ops guidance and etcd/S3 requirements
 - `docs/ops-api.md` - ops/admin API surface and examples
+- `docs/metrics.md` - Prometheus metrics and dashboards
 - `docs/storage.md` - S3 layout and segment/index details
 
 A detailed architecture overview and design rationale are available here:

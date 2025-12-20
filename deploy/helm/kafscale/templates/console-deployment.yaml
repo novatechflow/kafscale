@@ -42,7 +42,7 @@ spec:
 {{- end }}
       containers:
         - name: console
-          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          image: "{{ .Values.console.image.repository }}:{{ default .Chart.AppVersion .Values.console.image.tag }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR

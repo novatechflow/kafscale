@@ -26,7 +26,7 @@ operator:
   replicaCount: 2
   image:
     repository: ghcr.io/novatechflow/kafscale-operator
-    tag: "latest"
+    tag: ""
     pullPolicy: IfNotPresent
   etcdEndpoints:
     - "http://etcd:2379"
@@ -54,7 +54,7 @@ console:
   replicaCount: 1
   image:
     repository: ghcr.io/novatechflow/kafscale-console
-    tag: "latest"
+    tag: ""
     pullPolicy: IfNotPresent
   auth:
     username: ""

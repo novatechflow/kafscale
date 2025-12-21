@@ -9,6 +9,8 @@ sidebar: false
 
 KafScale brokers are stateless pods on Kubernetes. Metadata lives in etcd, while immutable log segments live in S3. Clients speak the Kafka protocol to brokers; brokers flush segments to S3 and serve reads with caching.
 
+Operational behavior under S3 degradation and recovery is covered in the Operations guide.
+
 ## Platform overview
 
 <div class="diagram">
@@ -67,11 +69,11 @@ KafScale brokers are stateless pods on Kubernetes. Metadata lives in etcd, while
     <path d="M480,172 L615,165" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#ao)"/>
     <text x="525" y="155" font-size="9" fill="#ffb347">flush segments</text>
 
-    <path d="M615,185 L480,185" stroke="#6aa7ff" stroke-width="2" fill="none" marker-end="url(#ah)"/>
-    <text x="525" y="200" font-size="9" fill="#6aa7ff">fetch + cache</text>
+    <path d="M480,185 L615,185" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#ao)"/>
+    <text x="520" y="175" font-size="9" fill="#ffb347">read on cache miss</text>
 
     <path d="M290,205 L290,245" stroke="#4ab7f1" stroke-width="1.5" fill="none" marker-end="url(#ag)"/>
-    <text x="305" y="230" font-size="9" fill="var(--diagram-label)">metadata</text>
+    <text x="305" y="230" font-size="9" fill="var(--diagram-label)">topic map · offsets · groups</text>
 
     <path d="M400,282 L615,282" stroke="#ffb347" stroke-width="1.5" fill="none" marker-end="url(#ao)"/>
     <text x="490" y="272" font-size="9" fill="var(--diagram-label)">snapshots</text>
@@ -102,7 +104,7 @@ KafScale brokers are stateless pods on Kubernetes. Metadata lives in etcd, while
     <rect x="200" y="30" width="140" height="70" rx="10" fill="rgba(106, 167, 255, 0.2)" stroke="#6aa7ff" stroke-width="1.5"/>
     <text x="270" y="55" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Broker</text>
     <text x="270" y="72" font-size="9" fill="var(--diagram-label)" text-anchor="middle">validate · batch</text>
-    <text x="270" y="86" font-size="9" fill="var(--diagram-label)" text-anchor="middle">assign offsets</text>
+    <text x="270" y="86" font-size="9" fill="var(--diagram-label)" text-anchor="middle">assign offsets (persist via etcd)</text>
 
     <!-- Buffer -->
     <rect x="400" y="30" width="130" height="70" rx="10" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
@@ -190,7 +192,7 @@ Producers send records to brokers. Brokers validate, batch, and assign offsets. 
   </svg>
 </div>
 
-Consumers request data from brokers. Brokers resolve the segment offset, check the LRU cache, and fetch from S3 on cache miss. Read-ahead prefetches likely-needed segments.
+Consumers request data from brokers. Brokers resolve the segment offset, check the LRU cache, and fetch from S3 on cache miss. Read-ahead prefetch is bounded and best-effort to avoid memory pressure.
 
 ## Segment format
 
@@ -251,7 +253,7 @@ Consumers request data from brokers. Brokers resolve the segment offset, check t
 
 | Decision | Rationale |
 |----------|-----------|
-| **S3 as source of truth** | 11 9's durability, infinite capacity, $0.023/GB |
+| **S3 as source of truth** | 11 9's durability, effectively unlimited capacity, low cost per GB |
 | **Stateless brokers** | Any pod serves any partition; HPA scales 0→N |
 | **etcd for metadata** | Leverages existing K8s etcd or dedicated cluster |
 | **~500ms latency** | Acceptable trade-off for ETL, logs, async events |

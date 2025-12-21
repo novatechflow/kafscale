@@ -25,15 +25,67 @@ limitations under the License.
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen)](https://goreportcard.com/report/github.com/novatechflow/kafscale)
 
-Kafscale™ is a Apache Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
+KafScale is a Kafka-protocol compatible streaming platform built around a simple premise:  
+**durable logs belong in object storage, not in stateful brokers**.
+
+Traditional Kafka couples durability, replication, and compute into long-lived broker processes.  
+This made sense in a disk-centric world. It becomes an operational and economic liability once object storage is available.
+
+KafScale separates concerns cleanly. Brokers are stateless and ephemeral. Durability lives in S3.  
+The Kafka protocol remains intact.
+
+KafScale is open source under the Apache 2.0 license and implemented in Go.  
+(KafScale is not a registered trademark.)
+
+---
 
 ## Why KafScale Exists
 
-Most Kafka deployments act as durable pipes: producers write, consumers read, teams rely on replay when something breaks. Very few workloads require sub-millisecond latency, exactly-once transactions, or compacted topics, yet traditional Kafka clusters still demand stateful brokers, disk management, and continuous operational effort.
+Most Kafka deployments are not event-driven transaction engines.  
+They are durable pipes: producers write, consumers read, teams rely on replay when something breaks.
 
-Kafscale targets the common case by keeping brokers stateless and putting durability in S3 while remaining compatible with existing Kafka clients and tooling.
+Despite this, traditional Kafka clusters still require:
+- Stateful brokers with local disks
+- Replica rebalancing and leader movement
+- Overprovisioning for peak load
+- Continuous operational intervention
 
-Kafscale is used in production environments, but there are no warranties or guarantees.
+These costs are structural, not accidental.
+
+Object storage changes the failure model, the scaling model, and the economics of durable logs.  
+Once durability is externalized, broker state stops being an asset and becomes a liability.
+
+KafScale targets this common case by:
+- Keeping brokers stateless
+- Writing immutable segments directly to S3
+- Preserving compatibility with existing Kafka clients and tooling
+
+KafScale is used in production environments, but there are no warranties or guarantees.
+
+---
+
+## Kafka Brokers Are a Legacy Artifact
+
+Kafka brokers were designed in a world where durable storage meant local disks and failure meant replacing machines. In that model, brokers had to own both compute and data. Replication, leader election, and rebalancing were necessary to protect durability.
+
+Cloud object storage changes this entirely.
+
+Object storage already provides durability, availability, and cost efficiency at a level that broker-local disks cannot match. Once log segments live in object storage, brokers no longer need to be long-lived, stateful processes. They become protocol endpoints and transient compute.
+
+Stateful brokers introduce complexity without adding resilience:
+- Local disks require replication and rebalancing.
+- Leader movement causes operational churn.
+- Overprovisioning is needed to survive failure and peak load.
+- Recovery time is tied to broker state, not data availability.
+
+Stateless brokers backed by immutable object storage invert this model:
+- Data durability is external and stable.
+- Brokers can scale, restart, or disappear without data movement.
+- Failure becomes a scheduling event, not an operational incident.
+
+KafScale is built on the assumption that broker state is a historical constraint, not a requirement. The Kafka protocol remains valuable. The broker-centric storage model does not.
+
+---
 
 ## Design Scope
 
@@ -52,6 +104,8 @@ Explicit non-goals:
 
 Stream processing is expected to run in external compute engines such as Apache Flink (https://flink.apache.org) or Apache Wayang (https://wayang.apache.org).
 
+---
+
 ## Architecture at a Glance
 
 - Brokers handle Kafka protocol traffic and buffer segments in memory.
@@ -59,62 +113,6 @@ Stream processing is expected to run in external compute engines such as Apache 
 - etcd stores metadata, offsets, and consumer group state.
 
 For the technical specification and data formats, see `kafscale-spec.md`.
-
-## Kafka Protocol Support (Broker-Advertised)
-
-Versions below reflect what the broker advertises in ApiVersions today.
-
-Supported:
-- Produce: v0-9
-- Fetch: v11-13
-- ListOffsets: v0
-- Metadata: v0-12
-- FindCoordinator: v3
-- JoinGroup / SyncGroup / Heartbeat / LeaveGroup: v4
-- OffsetCommit: v3
-- OffsetFetch: v5
-- DescribeGroups: v5
-- ListGroups: v5
-- OffsetForLeaderEpoch: v3
-- DescribeConfigs: v4
-- AlterConfigs: v1
-- CreatePartitions: v0-3
-- DeleteGroups: v0-2
-- CreateTopics: v0
-- DeleteTopics: v0
-
-Explicitly unsupported:
-- Transactions and KRaft APIs
-- Replica management internals (LeaderAndIsr, UpdateMetadata, etc.)
-
-## Quickstart
-
-See `docs/quickstart.md` for installation, `docs/user-guide.md` for runtime behavior, and `docs/development.md` for developer workflows.
-
-Common local commands:
-
-```bash
-make build
-make test
-make test-produce-consume
-make test-consumer-group
-```
-
-## Documentation Map
-
-- `kafscale-spec.md` - technical specification (architecture + data formats)
-- `docs/overview.md` - product overview and non-goals
-- `docs/quickstart.md` - install the operator and create your first cluster
-- `docs/architecture.md` - component responsibilities and data flow
-- `docs/protocol.md` - Kafka protocol support matrix
-- `docs/security.md` - security posture and roadmap
-- `docs/roadmap.md` - completed work and open gaps
-- `docs/user-guide.md` - running the platform
-- `docs/development.md` - dev workflow and test targets
-- `docs/operations.md` - ops guidance and etcd/S3 requirements
-- `docs/ops-api.md` - ops/admin API surface and examples
-- `docs/metrics.md` - Prometheus metrics and dashboards
-- `docs/storage.md` - S3 layout and segment/index details
 
 A detailed architecture overview and design rationale are available here:
 https://www.novatechflow.com/p/kafscale.html

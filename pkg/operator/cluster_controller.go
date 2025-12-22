@@ -39,10 +39,12 @@ import (
 )
 
 const (
-	defaultBrokerImage = "ghcr.io/novatechflow/kafscale-broker:latest"
+	defaultBrokerImage           = "ghcr.io/novatechflow/kafscale-broker:latest"
+	defaultBrokerImagePullPolicy = string(corev1.PullIfNotPresent)
 )
 
 var brokerImage = getEnv("BROKER_IMAGE", defaultBrokerImage)
+var brokerImagePullPolicy = getEnv("BROKER_IMAGE_PULL_POLICY", defaultBrokerImagePullPolicy)
 
 // ClusterReconciler reconciles KafscaleCluster resources into Deployments/Services.
 type ClusterReconciler struct {
@@ -130,6 +132,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 
 func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := brokerImage
+	pullPolicy := parsePullPolicy(brokerImagePullPolicy)
 	env := []corev1.EnvVar{
 		{Name: "KAFSCALE_S3_BUCKET", Value: cluster.Spec.S3.Bucket},
 		{Name: "KAFSCALE_S3_REGION", Value: cluster.Spec.S3.Region},
@@ -177,8 +180,9 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 	}
 
 	return corev1.Container{
-		Name:  "broker",
-		Image: image,
+		Name:            "broker",
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		Ports: []corev1.ContainerPort{
 			{Name: "kafka", ContainerPort: 9092},
 			{Name: "metrics", ContainerPort: 9093},
@@ -186,6 +190,17 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		Env:       env,
 		EnvFrom:   envFrom,
 		Resources: resources,
+	}
+}
+
+func parsePullPolicy(policy string) corev1.PullPolicy {
+	switch strings.TrimSpace(policy) {
+	case string(corev1.PullAlways):
+		return corev1.PullAlways
+	case string(corev1.PullNever):
+		return corev1.PullNever
+	default:
+		return corev1.PullIfNotPresent
 	}
 }
 

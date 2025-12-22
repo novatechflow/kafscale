@@ -43,8 +43,8 @@ spec:
 {{- end }}
       containers:
         - name: operator
-          image: "{{ .Values.operator.image.repository }}:{{ default .Chart.AppVersion .Values.operator.image.tag }}"
-          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          image: "{{ .Values.operator.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.image.tag) .Values.operator.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.operator.image.pullPolicy .Values.operator.image.useLatest }}
           ports:
             - name: metrics
               containerPort: {{ .Values.operator.metrics.port }}
@@ -57,6 +57,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: BROKER_IMAGE
+              value: "{{ .Values.operator.brokerImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.brokerImage.tag) .Values.operator.brokerImage.useLatest }}"
+            - name: BROKER_IMAGE_PULL_POLICY
+              value: "{{ ternary "Always" "IfNotPresent" .Values.operator.brokerImage.useLatest }}"
             - name: KAFSCALE_OPERATOR_ETCD_ENDPOINTS
               value: "{{ join "," .Values.operator.etcdEndpoints }}"
             - name: KAFSCALE_OPERATOR_LEADER_KEY

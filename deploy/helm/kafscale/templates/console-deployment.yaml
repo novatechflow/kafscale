@@ -42,8 +42,8 @@ spec:
 {{- end }}
       containers:
         - name: console
-          image: "{{ .Values.console.image.repository }}:{{ default .Chart.AppVersion .Values.console.image.tag }}"
-          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          image: "{{ .Values.console.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.console.image.tag) .Values.console.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.console.image.pullPolicy .Values.console.image.useLatest }}
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR
               value: ":8080"

@@ -39,7 +39,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
 
-By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`).
+By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
 
 ### Values to pay attention to
 

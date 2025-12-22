@@ -39,6 +39,8 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.image.tag=v0.1.0
 ```
 
+For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always`).
+
 After the chart is running you can create a cluster by applying a `KafscaleCluster` resource (see `config/samples/` for an example).  The console service is exposed as a ClusterIP by default; enable ingress by toggling `.Values.console.ingress`.
 
 ### Values Overview

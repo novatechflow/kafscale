@@ -27,7 +27,12 @@ operator:
   image:
     repository: ghcr.io/novatechflow/kafscale-operator
     tag: ""
+    useLatest: false
     pullPolicy: IfNotPresent
+  brokerImage:
+    repository: ghcr.io/novatechflow/kafscale-broker
+    tag: ""
+    useLatest: false
   etcdEndpoints:
     - "http://etcd:2379"
   leaderKey: "/kafscale/operator/leader"
@@ -55,6 +60,7 @@ console:
   image:
     repository: ghcr.io/novatechflow/kafscale-console
     tag: ""
+    useLatest: false
     pullPolicy: IfNotPresent
   auth:
     username: ""

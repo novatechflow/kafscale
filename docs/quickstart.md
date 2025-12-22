@@ -60,8 +60,9 @@ Leave etcd endpoints empty in both the Helm values and the cluster spec. The ope
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints={} \
-  --set operator.image.tag=latest \
-  --set console.image.tag=latest
+  --set operator.image.useLatest=true \
+  --set operator.brokerImage.useLatest=true \
+  --set console.image.useLatest=true
 ```
 
 ### Option B: External etcd
@@ -72,8 +73,9 @@ Provide reachable etcd endpoints.
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.tag=latest \
-  --set console.image.tag=latest
+  --set operator.image.useLatest=true \
+  --set operator.brokerImage.useLatest=true \
+  --set console.image.useLatest=true
 ```
 
 ## 4) Create a KafscaleCluster

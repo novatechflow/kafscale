@@ -95,6 +95,93 @@ func TestEnsureEtcdCreatesManagedCluster(t *testing.T) {
 	assertFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-snapshot")
 }
 
+func TestEnsureEtcdEnvOverrides(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdImageEnv, "etcd:test")
+	t.Setenv(operatorEtcdStorageEnv, "20Gi")
+	t.Setenv(operatorEtcdClassEnv, "fast")
+	t.Setenv(operatorEtcdSnapshotBucketEnv, "snap-bucket")
+	t.Setenv(operatorEtcdSnapshotPrefixEnv, "snap-prefix")
+	t.Setenv(operatorEtcdSnapshotScheduleEnv, "*/5 * * * *")
+	t.Setenv(operatorEtcdSnapshotEtcdctlEnv, "etcdctl:test")
+	t.Setenv(operatorEtcdSnapshotImageEnv, "awscli:test")
+	t.Setenv(operatorEtcdSnapshotEndpointEnv, "http://minio.local")
+	t.Setenv(operatorEtcdSnapshotCreateBucketEnv, "1")
+	t.Setenv(operatorEtcdSnapshotProtectBucketEnv, "1")
+
+	cluster := testCluster("override", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+
+	_, err := EnsureEtcd(context.Background(), c, scheme, cluster)
+	if err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	if len(sts.Spec.Template.Spec.Containers) == 0 || sts.Spec.Template.Spec.Containers[0].Image != "etcd:test" {
+		t.Fatalf("expected etcd image override, got %+v", sts.Spec.Template.Spec.Containers)
+	}
+	if len(sts.Spec.VolumeClaimTemplates) == 0 {
+		t.Fatalf("expected pvc template")
+	}
+	if got := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "20Gi" {
+		t.Fatalf("expected storage size 20Gi, got %s", got.String())
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName == nil || *sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName != "fast" {
+		t.Fatalf("expected storage class fast, got %+v", sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName)
+	}
+
+	cron := &batchv1.CronJob{}
+	assertFound(t, c, cron, cluster.Namespace, cluster.Name+"-etcd-snapshot")
+	if cron.Spec.Schedule != "*/5 * * * *" {
+		t.Fatalf("expected schedule override, got %q", cron.Spec.Schedule)
+	}
+	if len(cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers) == 0 || cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers[0].Image != "etcdctl:test" {
+		t.Fatalf("expected etcdctl image override, got %+v", cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers)
+	}
+	if len(cron.Spec.JobTemplate.Spec.Template.Spec.Containers) == 0 || cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image != "awscli:test" {
+		t.Fatalf("expected snapshot image override, got %+v", cron.Spec.JobTemplate.Spec.Template.Spec.Containers)
+	}
+	env := cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env
+	if got := envValue(env, "SNAPSHOT_BUCKET"); got != "snap-bucket" {
+		t.Fatalf("expected snapshot bucket override, got %q", got)
+	}
+	if got := envValue(env, "SNAPSHOT_PREFIX"); got != "snap-prefix" {
+		t.Fatalf("expected snapshot prefix override, got %q", got)
+	}
+	if got := envValue(env, "AWS_ENDPOINT_URL"); got != "http://minio.local" {
+		t.Fatalf("expected endpoint override, got %q", got)
+	}
+	if got := envValue(env, "CREATE_BUCKET"); got != "1" {
+		t.Fatalf("expected create bucket enabled, got %q", got)
+	}
+	if got := envValue(env, "PROTECT_BUCKET"); got != "1" {
+		t.Fatalf("expected protect bucket enabled, got %q", got)
+	}
+}
+
+func TestSnapshotStaleAfterEnv(t *testing.T) {
+	t.Setenv(operatorEtcdSnapshotStaleAfterEnv, "900")
+	if got := snapshotStaleAfterSeconds(); got != 900 {
+		t.Fatalf("expected stale after 900, got %d", got)
+	}
+	t.Setenv(operatorEtcdSnapshotStaleAfterEnv, "0")
+	if got := snapshotStaleAfterSeconds(); got != defaultSnapshotStaleAfterSeconds {
+		t.Fatalf("expected default stale after, got %d", got)
+	}
+}
+
+func envValue(env []corev1.EnvVar, key string) string {
+	for _, entry := range env {
+		if entry.Name == key {
+			return entry.Value
+		}
+	}
+	return ""
+}
+
 func testCluster(name string, endpoints []string) *kafscalev1alpha1.KafscaleCluster {
 	return &kafscalev1alpha1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{

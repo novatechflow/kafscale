@@ -18,6 +18,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -59,7 +60,7 @@ func main() {
 			BindAddress: metricsAddr,
 		},
 		LeaderElection:   enableLeaderElection,
-		LeaderElectionID: "kafscale-operator",
+		LeaderElectionID: leaderElectionID(),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -83,4 +84,11 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func leaderElectionID() string {
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_OPERATOR_LEADER_KEY")); val != "" {
+		return val
+	}
+	return "kafscale-operator"
 }

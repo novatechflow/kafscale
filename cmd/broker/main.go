@@ -1148,13 +1148,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	if autoPartitions < 1 {
 		autoPartitions = 1
 	}
-	health := broker.NewS3HealthMonitor(broker.S3HealthConfig{
-		Window:      time.Duration(parseEnvInt("KAFSCALE_S3_HEALTH_WINDOW_SEC", 60)) * time.Second,
-		LatencyWarn: time.Duration(parseEnvInt("KAFSCALE_S3_LATENCY_WARN_MS", 500)) * time.Millisecond,
-		LatencyCrit: time.Duration(parseEnvInt("KAFSCALE_S3_LATENCY_CRIT_MS", 3000)) * time.Millisecond,
-		ErrorWarn:   parseEnvFloat("KAFSCALE_S3_ERROR_RATE_WARN", 0.2),
-		ErrorCrit:   parseEnvFloat("KAFSCALE_S3_ERROR_RATE_CRIT", 0.6),
-	})
+	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -1191,7 +1185,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 }
 
 func (h *handler) runStartupChecks(parent context.Context) error {
-	timeout := time.Duration(parseEnvInt("KAFSCALE_STARTUP_TIMEOUT_SEC", 30)) * time.Second
+	timeout := startupTimeoutFromEnv()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
@@ -1264,17 +1258,48 @@ func main() {
 }
 
 func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
-	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
+	writeCfg, readCfg, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	if useMemory {
 		logger.Info("using in-memory S3 client", "env", "KAFSCALE_USE_MEMORY_S3=1")
 		return storage.NewMemoryS3Client()
 	}
 
-	bucket := envOrDefault("KAFSCALE_S3_BUCKET", defaultMinioBucket)
-	region := envOrDefault("KAFSCALE_S3_REGION", defaultMinioRegion)
-	endpoint := envOrDefault("KAFSCALE_S3_ENDPOINT", defaultMinioEndpoint)
+	client, err := storage.NewS3Client(ctx, writeCfg)
+	if err != nil {
+		logger.Error("failed to create S3 client; using in-memory", "error", err, "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint)
+		return storage.NewMemoryS3Client()
+	}
+
+	if err := client.EnsureBucket(ctx); err != nil {
+		logger.Error("failed to ensure S3 bucket", "bucket", writeCfg.Bucket, "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("using AWS-compatible S3 client", "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint, "force_path_style", writeCfg.ForcePathStyle, "kms_configured", writeCfg.KMSKeyARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
+
+	if useReadReplica {
+		readClient, err := storage.NewS3Client(ctx, readCfg)
+		if err != nil {
+			logger.Error("failed to create read S3 client; using write client", "error", err, "bucket", readCfg.Bucket, "region", readCfg.Region, "endpoint", readCfg.Endpoint)
+			return client
+		}
+		logger.Info("using S3 read replica", "bucket", readCfg.Bucket, "region", readCfg.Region, "endpoint", readCfg.Endpoint)
+		return newDualS3Client(client, readClient)
+	}
+
+	return client
+}
+
+func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool, bool) {
+	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
+		return storage.S3Config{}, storage.S3Config{}, true, false, false, false
+	}
+	writeBucket := envOrDefault("KAFSCALE_S3_BUCKET", defaultMinioBucket)
+	writeRegion := envOrDefault("KAFSCALE_S3_REGION", defaultMinioRegion)
+	writeEndpoint := envOrDefault("KAFSCALE_S3_ENDPOINT", defaultMinioEndpoint)
 	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", true)
 	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
-	usingDefaultMinio := bucket == defaultMinioBucket && region == defaultMinioRegion && endpoint == defaultMinioEndpoint
+	usingDefaultMinio := writeBucket == defaultMinioBucket && writeRegion == defaultMinioRegion && writeEndpoint == defaultMinioEndpoint
 	accessKey := os.Getenv("KAFSCALE_S3_ACCESS_KEY")
 	secretKey := os.Getenv("KAFSCALE_S3_SECRET_KEY")
 	sessionToken := os.Getenv("KAFSCALE_S3_SESSION_TOKEN")
@@ -1283,61 +1308,55 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 		secretKey = defaultMinioSecretKey
 	}
 	credsProvided := accessKey != "" && secretKey != ""
-
-	client, err := storage.NewS3Client(ctx, storage.S3Config{
-		Bucket:          bucket,
-		Region:          region,
-		Endpoint:        endpoint,
+	writeCfg := storage.S3Config{
+		Bucket:          writeBucket,
+		Region:          writeRegion,
+		Endpoint:        writeEndpoint,
 		ForcePathStyle:  forcePathStyle,
 		AccessKeyID:     accessKey,
 		SecretAccessKey: secretKey,
 		SessionToken:    sessionToken,
 		KMSKeyARN:       kmsARN,
-	})
-	if err != nil {
-		logger.Error("failed to create S3 client; using in-memory", "error", err, "bucket", bucket, "region", region, "endpoint", endpoint)
-		return storage.NewMemoryS3Client()
 	}
-
-	if err := client.EnsureBucket(ctx); err != nil {
-		logger.Error("failed to ensure S3 bucket", "bucket", bucket, "error", err)
-		os.Exit(1)
-	}
-
-	logger.Info("using AWS-compatible S3 client", "bucket", bucket, "region", region, "endpoint", endpoint, "force_path_style", forcePathStyle, "kms_configured", kmsARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
 
 	readBucket := os.Getenv("KAFSCALE_S3_READ_BUCKET")
 	readRegion := os.Getenv("KAFSCALE_S3_READ_REGION")
 	readEndpoint := os.Getenv("KAFSCALE_S3_READ_ENDPOINT")
-	if readBucket != "" || readRegion != "" || readEndpoint != "" {
-		if readBucket == "" {
-			readBucket = bucket
-		}
-		if readRegion == "" {
-			readRegion = region
-		}
-		if readEndpoint == "" {
-			readEndpoint = endpoint
-		}
-		readClient, err := storage.NewS3Client(ctx, storage.S3Config{
-			Bucket:          readBucket,
-			Region:          readRegion,
-			Endpoint:        readEndpoint,
-			ForcePathStyle:  forcePathStyle,
-			AccessKeyID:     accessKey,
-			SecretAccessKey: secretKey,
-			SessionToken:    sessionToken,
-			KMSKeyARN:       kmsARN,
-		})
-		if err != nil {
-			logger.Error("failed to create read S3 client; using write client", "error", err, "bucket", readBucket, "region", readRegion, "endpoint", readEndpoint)
-			return client
-		}
-		logger.Info("using S3 read replica", "bucket", readBucket, "region", readRegion, "endpoint", readEndpoint)
-		return newDualS3Client(client, readClient)
+	useReadReplica := readBucket != "" || readRegion != "" || readEndpoint != ""
+	if readBucket == "" {
+		readBucket = writeBucket
 	}
+	if readRegion == "" {
+		readRegion = writeRegion
+	}
+	if readEndpoint == "" {
+		readEndpoint = writeEndpoint
+	}
+	readCfg := storage.S3Config{
+		Bucket:          readBucket,
+		Region:          readRegion,
+		Endpoint:        readEndpoint,
+		ForcePathStyle:  forcePathStyle,
+		AccessKeyID:     accessKey,
+		SecretAccessKey: secretKey,
+		SessionToken:    sessionToken,
+		KMSKeyARN:       kmsARN,
+	}
+	return writeCfg, readCfg, false, usingDefaultMinio, credsProvided, useReadReplica
+}
 
-	return client
+func s3HealthConfigFromEnv() broker.S3HealthConfig {
+	return broker.S3HealthConfig{
+		Window:      time.Duration(parseEnvInt("KAFSCALE_S3_HEALTH_WINDOW_SEC", 60)) * time.Second,
+		LatencyWarn: time.Duration(parseEnvInt("KAFSCALE_S3_LATENCY_WARN_MS", 500)) * time.Millisecond,
+		LatencyCrit: time.Duration(parseEnvInt("KAFSCALE_S3_LATENCY_CRIT_MS", 3000)) * time.Millisecond,
+		ErrorWarn:   parseEnvFloat("KAFSCALE_S3_ERROR_RATE_WARN", 0.2),
+		ErrorCrit:   parseEnvFloat("KAFSCALE_S3_ERROR_RATE_CRIT", 0.6),
+	}
+}
+
+func startupTimeoutFromEnv() time.Duration {
+	return time.Duration(parseEnvInt("KAFSCALE_STARTUP_TIMEOUT_SEC", 30)) * time.Second
 }
 
 func metadataForBroker(broker protocol.MetadataBroker) metadata.ClusterMetadata {
@@ -1374,14 +1393,9 @@ func defaultMetadata() metadata.ClusterMetadata {
 
 func buildStore(ctx context.Context, brokerInfo protocol.MetadataBroker, logger *slog.Logger) metadata.Store {
 	meta := metadataForBroker(brokerInfo)
-	endpoints := strings.TrimSpace(os.Getenv("KAFSCALE_ETCD_ENDPOINTS"))
-	if endpoints == "" {
+	cfg, ok := etcdConfigFromEnv()
+	if !ok {
 		return metadata.NewInMemoryStore(meta)
-	}
-	cfg := metadata.EtcdStoreConfig{
-		Endpoints: strings.Split(endpoints, ","),
-		Username:  os.Getenv("KAFSCALE_ETCD_USERNAME"),
-		Password:  os.Getenv("KAFSCALE_ETCD_PASSWORD"),
 	}
 	store, err := metadata.NewEtcdStore(ctx, meta, cfg)
 	if err != nil {
@@ -1390,6 +1404,18 @@ func buildStore(ctx context.Context, brokerInfo protocol.MetadataBroker, logger 
 	}
 	logger.Info("using etcd-backed metadata store", "endpoints", cfg.Endpoints)
 	return store
+}
+
+func etcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
+	endpoints := strings.TrimSpace(os.Getenv("KAFSCALE_ETCD_ENDPOINTS"))
+	if endpoints == "" {
+		return metadata.EtcdStoreConfig{}, false
+	}
+	return metadata.EtcdStoreConfig{
+		Endpoints: strings.Split(endpoints, ","),
+		Username:  os.Getenv("KAFSCALE_ETCD_USERNAME"),
+		Password:  os.Getenv("KAFSCALE_ETCD_PASSWORD"),
+	}, true
 }
 
 func startMetricsServer(ctx context.Context, addr string, h *handler, logger *slog.Logger) {
@@ -1499,6 +1525,15 @@ func (h *handler) readiness() (bool, string) {
 }
 
 func newLogger() *slog.Logger {
+	level := logLevelFromEnv()
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level:     level,
+		AddSource: true,
+	})
+	return slog.New(handler).With("component", "broker")
+}
+
+func logLevelFromEnv() slog.Level {
 	level := slog.LevelWarn
 	switch strings.ToLower(os.Getenv("KAFSCALE_LOG_LEVEL")) {
 	case "debug":
@@ -1508,11 +1543,7 @@ func newLogger() *slog.Logger {
 	case "error":
 		level = slog.LevelError
 	}
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     level,
-		AddSource: true,
-	})
-	return slog.New(handler).With("component", "broker")
+	return level
 }
 func parseEnvInt(name string, fallback int) int {
 	if val := strings.TrimSpace(os.Getenv(name)); val != "" {

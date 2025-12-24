@@ -116,14 +116,9 @@ func parseDurationEnv(key string) (time.Duration, error) {
 }
 
 func buildMetadataStore(ctx context.Context) (metadata.Store, error) {
-	endpoints := strings.TrimSpace(os.Getenv("KAFSCALE_MCP_ETCD_ENDPOINTS"))
-	if endpoints == "" {
+	cfg, ok := mcpEtcdConfigFromEnv()
+	if !ok {
 		return nil, nil
-	}
-	cfg := metadata.EtcdStoreConfig{
-		Endpoints: strings.Split(endpoints, ","),
-		Username:  os.Getenv("KAFSCALE_MCP_ETCD_USERNAME"),
-		Password:  os.Getenv("KAFSCALE_MCP_ETCD_PASSWORD"),
 	}
 	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, cfg)
 	if err != nil {
@@ -138,4 +133,16 @@ func buildMetricsProvider() console.MetricsProvider {
 		return nil
 	}
 	return console.NewPromMetricsClient(metricsURL)
+}
+
+func mcpEtcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
+	endpoints := strings.TrimSpace(os.Getenv("KAFSCALE_MCP_ETCD_ENDPOINTS"))
+	if endpoints == "" {
+		return metadata.EtcdStoreConfig{}, false
+	}
+	return metadata.EtcdStoreConfig{
+		Endpoints: strings.Split(endpoints, ","),
+		Username:  os.Getenv("KAFSCALE_MCP_ETCD_USERNAME"),
+		Password:  os.Getenv("KAFSCALE_MCP_ETCD_PASSWORD"),
+	}, true
 }

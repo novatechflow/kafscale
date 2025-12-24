@@ -201,6 +201,15 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
 - `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
 - `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
+
+Read replica example (multi-region reads):
+
+```bash
+export KAFSCALE_S3_BUCKET=prod-segments
+export KAFSCALE_S3_REGION=us-east-1
+export KAFSCALE_S3_READ_BUCKET=prod-segments-replica
+export KAFSCALE_S3_READ_REGION=eu-west-1
+```
 - `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes.
 - `KAFSCALE_READAHEAD_SEGMENTS` – Segment readahead count.
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).

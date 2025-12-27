@@ -13,20 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package e2e
 
-import "testing"
+import (
+	"io"
 
-func TestLeaderElectionIDDefault(t *testing.T) {
-	t.Setenv("KAFSCALE_OPERATOR_LEADER_KEY", "")
-	if got := leaderElectionID(); got != "kafscale-operator" {
-		t.Fatalf("expected default leader election id, got %q", got)
-	}
-}
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+)
 
-func TestLeaderElectionIDOverride(t *testing.T) {
-	t.Setenv("KAFSCALE_OPERATOR_LEADER_KEY", "kafscale-operator-custom")
-	if got := leaderElectionID(); got != "kafscale-operator-custom" {
-		t.Fatalf("expected override leader election id, got %q", got)
-	}
+func setupTestLogger() {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(false), zap.WriteTo(io.Discard)))
 }

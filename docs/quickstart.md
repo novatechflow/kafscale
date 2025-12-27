@@ -155,6 +155,11 @@ kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders
 kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning
 ```
 
+External clients: configure `spec.brokers.advertisedHost` / `advertisedPort` and
+`spec.brokers.service` in your `KafscaleCluster` so Kafka clients learn a
+reachable endpoint. See `docs/operations.md` and `deploy/helm/README.md` for
+examples.
+
 ## Next Steps
 
 - `docs/operations.md` for etcd/S3 HA and backup guidance

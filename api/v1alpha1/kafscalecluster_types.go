@@ -30,13 +30,26 @@ type KafscaleClusterSpec struct {
 }
 
 type BrokerSpec struct {
-	Replicas  *int32          `json:"replicas,omitempty"`
-	Resources BrokerResources `json:"resources,omitempty"`
+	Replicas       *int32            `json:"replicas,omitempty"`
+	Resources      BrokerResources   `json:"resources,omitempty"`
+	AdvertisedHost string            `json:"advertisedHost,omitempty"`
+	AdvertisedPort *int32            `json:"advertisedPort,omitempty"`
+	Service        BrokerServiceSpec `json:"service,omitempty"`
 }
 
 type BrokerResources struct {
 	Requests corev1.ResourceList `json:"requests,omitempty"`
 	Limits   corev1.ResourceList `json:"limits,omitempty"`
+}
+
+type BrokerServiceSpec struct {
+	Type                     string            `json:"type,omitempty"`
+	Annotations              map[string]string `json:"annotations,omitempty"`
+	LoadBalancerIP           string            `json:"loadBalancerIP,omitempty"`
+	LoadBalancerSourceRanges []string          `json:"loadBalancerSourceRanges,omitempty"`
+	ExternalTrafficPolicy    string            `json:"externalTrafficPolicy,omitempty"`
+	KafkaNodePort            *int32            `json:"kafkaNodePort,omitempty"`
+	MetricsNodePort          *int32            `json:"metricsNodePort,omitempty"`
 }
 
 type S3Spec struct {
@@ -122,7 +135,12 @@ func (in *BrokerSpec) DeepCopyInto(out *BrokerSpec) {
 		out.Replicas = new(int32)
 		*out.Replicas = *in.Replicas
 	}
+	if in.AdvertisedPort != nil {
+		out.AdvertisedPort = new(int32)
+		*out.AdvertisedPort = *in.AdvertisedPort
+	}
 	in.Resources.DeepCopyInto(&out.Resources)
+	in.Service.DeepCopyInto(&out.Service)
 }
 
 func (in *BrokerSpec) DeepCopy() *BrokerSpec {
@@ -136,6 +154,37 @@ func (in *BrokerSpec) DeepCopy() *BrokerSpec {
 
 func (in *ClusterConfigSpec) DeepCopyInto(out *ClusterConfigSpec) {
 	*out = *in
+}
+
+func (in *BrokerServiceSpec) DeepCopyInto(out *BrokerServiceSpec) {
+	*out = *in
+	if in.Annotations != nil {
+		out.Annotations = make(map[string]string, len(in.Annotations))
+		for key, val := range in.Annotations {
+			out.Annotations[key] = val
+		}
+	}
+	if in.LoadBalancerSourceRanges != nil {
+		out.LoadBalancerSourceRanges = make([]string, len(in.LoadBalancerSourceRanges))
+		copy(out.LoadBalancerSourceRanges, in.LoadBalancerSourceRanges)
+	}
+	if in.KafkaNodePort != nil {
+		out.KafkaNodePort = new(int32)
+		*out.KafkaNodePort = *in.KafkaNodePort
+	}
+	if in.MetricsNodePort != nil {
+		out.MetricsNodePort = new(int32)
+		*out.MetricsNodePort = *in.MetricsNodePort
+	}
+}
+
+func (in *BrokerServiceSpec) DeepCopy() *BrokerServiceSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(BrokerServiceSpec)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *ClusterConfigSpec) DeepCopy() *ClusterConfigSpec {

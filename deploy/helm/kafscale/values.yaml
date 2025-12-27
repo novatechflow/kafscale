@@ -35,7 +35,7 @@ operator:
     useLatest: false
   etcdEndpoints:
     - "http://etcd:2379"
-  leaderKey: "/kafscale/operator/leader"
+  leaderKey: "kafscale-operator"
   podAnnotations: {}
   resources: {}
   nodeSelector: {}

@@ -19,14 +19,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kafscalev1alpha1 "github.com/novatechflow/kafscale/api/v1alpha1"
 	"github.com/novatechflow/kafscale/pkg/metadata"
 	"github.com/novatechflow/kafscale/pkg/protocol"
+)
+
+const (
+	operatorEtcdSilenceLogsEnv = "KAFSCALE_OPERATOR_ETCD_SILENCE_LOGS"
 )
 
 // SnapshotPublisher translates KafscaleCluster/KafscaleTopic resources into
@@ -70,11 +76,18 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 	}
 	brokers := make([]protocol.MetadataBroker, replicas)
 	brokerHost := fmt.Sprintf("%s-broker.%s.svc.cluster.local", cluster.Name, cluster.Namespace)
+	if strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost) != "" {
+		brokerHost = strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
+	}
+	brokerPort := int32(9092)
+	if cluster.Spec.Brokers.AdvertisedPort != nil && *cluster.Spec.Brokers.AdvertisedPort > 0 {
+		brokerPort = *cluster.Spec.Brokers.AdvertisedPort
+	}
 	for i := int32(0); i < replicas; i++ {
 		brokers[i] = protocol.MetadataBroker{
 			NodeID: i,
 			Host:   brokerHost,
-			Port:   9092,
+			Port:   brokerPort,
 		}
 	}
 	metaTopics := make([]protocol.MetadataTopic, 0, len(topics))
@@ -129,10 +142,14 @@ func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 	if len(endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints required")
 	}
-	cli, err := clientv3.New(clientv3.Config{
+	cfg := clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
-	})
+	}
+	if parseBoolEnv(operatorEtcdSilenceLogsEnv) {
+		cfg.Logger = zap.NewNop()
+	}
+	cli, err := clientv3.New(cfg)
 	if err != nil {
 		return err
 	}

@@ -15,7 +15,7 @@
 # limitations under the License.
 set -euo pipefail
 
-MIN_COVERAGE="${1:-1}"
+MIN_COVERAGE="${1:-45}"
 
 go test ./... -coverprofile=coverage.out
 

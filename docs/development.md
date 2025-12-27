@@ -134,6 +134,13 @@ The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fe
 
 `TestOperatorManagedEtcdResources` uses controller-runtime envtest to validate operator reconciliation without spinning up kind. Install envtest assets with `setup-envtest` or set `KUBEBUILDER_ASSETS` to a directory containing `kube-apiserver` and `etcd` binaries.
 
+Recommended setup (using `setup-envtest`):
+
+```bash
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.29.x)"
+```
+
 ### Broker logging levels
 
 The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we operate in warning-and-above mode, which keeps regular e2e/test runs quiet. Set `KAFSCALE_LOG_LEVEL=info` or `debug` (optionally together with `KAFSCALE_TRACE_KAFKA=true`) when you need additional visibility; the `test-produce-consume-debug` target wires those env vars up for you.

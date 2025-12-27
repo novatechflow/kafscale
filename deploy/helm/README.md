@@ -43,6 +43,14 @@ For a dev/latest install, set `operator.image.useLatest=true`, `console.image.us
 
 After the chart is running you can create a cluster by applying a `KafscaleCluster` resource (see `config/samples/` for an example).  The console service is exposed as a ClusterIP by default; enable ingress by toggling `.Values.console.ingress`.
 
+### External Broker Access
+
+Broker Services are created by the operator. For external clients, configure the
+`KafscaleCluster` spec to expose a LoadBalancer or NodePort and set the advertised
+address/port so Kafka clients learn the reachable endpoint.
+
+See `docs/operations.md` for a full example and TLS termination guidance.
+
 ### MCP 
 
 The MCP service is optional and disabled by default. Enable it with `mcp.enabled=true`; it will deploy into the dedicated namespace defined by `mcp.namespace.name`.
@@ -52,7 +60,7 @@ The MCP service is optional and disabled by default. Enable it with `mcp.enabled
 | Key | Description | Default |
 |-----|-------------|---------|
 | `operator.replicaCount` | Number of operator replicas (each performs leader election via etcd). | `2` |
-| `operator.leaderKey` | etcd prefix used for operator HA leader election. | `/kafscale/operator/leader` |
+| `operator.leaderKey` | Kubernetes leader election lock name. | `kafscale-operator` |
 | `operator.etcdEndpoints` | List of etcd endpoints the operator will connect to. | `["http://etcd:2379"]` |
 | `console.service.type` | Kubernetes service type for the console. | `ClusterIP` |
 | `console.ingress.*` | Optional ingress configuration for exposing the console. | disabled |

@@ -194,7 +194,32 @@ test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test-multi-segment-durability
 	$(MAKE) test-produce-consume
 
-test-operator: docker-build ## Run operator kind+helm snapshot e2e (requires kind/kubectl/helm).
+test-operator: docker-build ## Run operator envtest + kind snapshot e2e (requires kind/kubectl/helm for kind).
+	@SETUP_ENVTEST=$$(command -v setup-envtest || true); \
+	if [ -z "$$SETUP_ENVTEST" ]; then \
+		GOBIN=$$(go env GOBIN); \
+		GOPATH=$$(go env GOPATH); \
+		if [ -n "$$GOBIN" ] && [ -x "$$GOBIN/setup-envtest" ]; then \
+			SETUP_ENVTEST="$$GOBIN/setup-envtest"; \
+		elif [ -x "$$GOPATH/bin/setup-envtest" ]; then \
+			SETUP_ENVTEST="$$GOPATH/bin/setup-envtest"; \
+		else \
+			echo "setup-envtest not found; attempting install"; \
+			go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest; \
+			if [ -n "$$GOBIN" ]; then \
+				SETUP_ENVTEST="$$GOBIN/setup-envtest"; \
+			else \
+				SETUP_ENVTEST="$$GOPATH/bin/setup-envtest"; \
+			fi; \
+		fi; \
+	fi; \
+	if [ ! -x "$$SETUP_ENVTEST" ]; then \
+		echo "setup-envtest not available on PATH or GOPATH/bin; please add it to PATH"; \
+		exit 1; \
+	fi; \
+	export KUBEBUILDER_ASSETS="$$( "$$SETUP_ENVTEST" use -p path 1.29.x )"; \
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run 'TestOperator(ManagedEtcdResources|BrokerExternalAccessConfig)' -v
 	KAFSCALE_E2E=1 \
 	KAFSCALE_E2E_KIND=1 \
 	KAFSCALE_KIND_RECREATE=1 \
@@ -285,6 +310,8 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
 	spec:
 	  brokers:
+	    advertisedHost: 127.0.0.1
+	    advertisedPort: 39092
 	    replicas: 1
 	  s3:
 	    bucket: kafscale-snapshots

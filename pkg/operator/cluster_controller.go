@@ -133,12 +133,21 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := brokerImage
 	pullPolicy := parsePullPolicy(brokerImagePullPolicy)
+	brokerHost := fmt.Sprintf("%s-broker.%s.svc.cluster.local", cluster.Name, cluster.Namespace)
+	if strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost) != "" {
+		brokerHost = strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
+	}
+	brokerPort := int32(9092)
+	if cluster.Spec.Brokers.AdvertisedPort != nil && *cluster.Spec.Brokers.AdvertisedPort > 0 {
+		brokerPort = *cluster.Spec.Brokers.AdvertisedPort
+	}
 	env := []corev1.EnvVar{
 		{Name: "KAFSCALE_S3_BUCKET", Value: cluster.Spec.S3.Bucket},
 		{Name: "KAFSCALE_S3_REGION", Value: cluster.Spec.S3.Region},
 		{Name: "KAFSCALE_S3_NAMESPACE", Value: cluster.Namespace},
 		{Name: "KAFSCALE_ETCD_ENDPOINTS", Value: strings.Join(endpoints, ",")},
-		{Name: "KAFSCALE_BROKER_HOST", Value: fmt.Sprintf("%s-broker.%s.svc.cluster.local", cluster.Name, cluster.Namespace)},
+		{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost},
+		{Name: "KAFSCALE_BROKER_PORT", Value: fmt.Sprintf("%d", brokerPort)},
 		{Name: "KAFSCALE_BROKER_ADDR", Value: ":9092"},
 		{Name: "KAFSCALE_METRICS_ADDR", Value: ":9093"},
 	}
@@ -213,6 +222,41 @@ func parsePullPolicy(policy string) corev1.PullPolicy {
 	}
 }
 
+func parseServiceType(serviceType string) corev1.ServiceType {
+	switch strings.TrimSpace(serviceType) {
+	case string(corev1.ServiceTypeLoadBalancer):
+		return corev1.ServiceTypeLoadBalancer
+	case string(corev1.ServiceTypeNodePort):
+		return corev1.ServiceTypeNodePort
+	case string(corev1.ServiceTypeClusterIP):
+		return corev1.ServiceTypeClusterIP
+	default:
+		return ""
+	}
+}
+
+func parseExternalTrafficPolicy(policy string) corev1.ServiceExternalTrafficPolicyType {
+	switch strings.TrimSpace(policy) {
+	case string(corev1.ServiceExternalTrafficPolicyTypeLocal):
+		return corev1.ServiceExternalTrafficPolicyTypeLocal
+	case string(corev1.ServiceExternalTrafficPolicyTypeCluster):
+		return corev1.ServiceExternalTrafficPolicyTypeCluster
+	default:
+		return ""
+	}
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	dest := make(map[string]string, len(source))
+	for key, val := range source {
+		dest[key] = val
+	}
+	return dest
+}
+
 func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -225,11 +269,33 @@ func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster 
 			"app":     "kafscale-broker",
 			"cluster": cluster.Name,
 		}
-		svc.Spec.Ports = []corev1.ServicePort{
+		ports := []corev1.ServicePort{
 			{Name: "kafka", Port: 9092, TargetPort: intstr.FromString("kafka")},
 			{Name: "metrics", Port: 9093, TargetPort: intstr.FromString("metrics")},
 		}
-		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		if nodePort := cluster.Spec.Brokers.Service.KafkaNodePort; nodePort != nil && *nodePort > 0 {
+			ports[0].NodePort = *nodePort
+		}
+		if nodePort := cluster.Spec.Brokers.Service.MetricsNodePort; nodePort != nil && *nodePort > 0 {
+			ports[1].NodePort = *nodePort
+		}
+		svc.Spec.Ports = ports
+		svc.Spec.Type = parseServiceType(cluster.Spec.Brokers.Service.Type)
+		if svc.Spec.Type == "" {
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+		}
+		if annotations := cluster.Spec.Brokers.Service.Annotations; len(annotations) > 0 {
+			svc.Annotations = copyStringMap(annotations)
+		}
+		if strings.TrimSpace(cluster.Spec.Brokers.Service.LoadBalancerIP) != "" {
+			svc.Spec.LoadBalancerIP = strings.TrimSpace(cluster.Spec.Brokers.Service.LoadBalancerIP)
+		}
+		if ranges := cluster.Spec.Brokers.Service.LoadBalancerSourceRanges; len(ranges) > 0 {
+			svc.Spec.LoadBalancerSourceRanges = append([]string(nil), ranges...)
+		}
+		if policy := parseExternalTrafficPolicy(cluster.Spec.Brokers.Service.ExternalTrafficPolicy); policy != "" {
+			svc.Spec.ExternalTrafficPolicy = policy
+		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
 	})
 	return err

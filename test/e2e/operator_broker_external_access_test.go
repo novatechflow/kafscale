@@ -19,25 +19,20 @@ package e2e
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -46,7 +41,7 @@ import (
 	"github.com/novatechflow/kafscale/pkg/operator"
 )
 
-func TestOperatorManagedEtcdResources(t *testing.T) {
+func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 	setupTestLogger()
 	if !parseBoolEnv("KAFSCALE_E2E") {
 		t.Skip("set KAFSCALE_E2E=1 to run operator envtest")
@@ -54,10 +49,12 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 	if !envtestAssetsAvailable() {
 		t.Skip("envtest assets missing; set KUBEBUILDER_ASSETS or install setup-envtest")
 	}
-
-	t.Setenv("KAFSCALE_OPERATOR_ETCD_ENDPOINTS", "")
 	t.Setenv("KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT", "1")
 	t.Setenv("KAFSCALE_OPERATOR_ETCD_SILENCE_LOGS", "1")
+
+	advertisedPort := int32(19092)
+	kafkaNodePort := int32(30092)
+	metricsNodePort := int32(30093)
 
 	crdPath := filepath.Join(repoRoot(t), "deploy", "helm", "kafscale", "crds")
 	env := &envtest.Environment{
@@ -78,8 +75,6 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(appsv1.AddToScheme(scheme))
 	utilruntime.Must(autoscalingv2.AddToScheme(scheme))
-	utilruntime.Must(batchv1.AddToScheme(scheme))
-	utilruntime.Must(policyv1.AddToScheme(scheme))
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme,
@@ -98,9 +93,6 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 	if err := operator.NewClusterReconciler(mgr, publisher).SetupWithManager(mgr); err != nil {
 		t.Fatalf("cluster reconciler: %v", err)
 	}
-	if err := operator.NewTopicReconciler(mgr, publisher).SetupWithManager(mgr); err != nil {
-		t.Fatalf("topic reconciler: %v", err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -112,16 +104,31 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 
 	cluster := &kafscalev1alpha1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "etcd-managed",
+			Name:      "external-access",
 			Namespace: "default",
 		},
 		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
-				Bucket: "snapshots",
-				Region: "us-east-1",
+			Brokers: kafscalev1alpha1.BrokerSpec{
+				AdvertisedHost: "kafka.example.com",
+				AdvertisedPort: &advertisedPort,
+				Service: kafscalev1alpha1.BrokerServiceSpec{
+					Type:                     string(corev1.ServiceTypeLoadBalancer),
+					Annotations:              map[string]string{"cloud.example.com/lb": "external"},
+					LoadBalancerIP:           "203.0.113.10",
+					LoadBalancerSourceRanges: []string{"203.0.113.0/24"},
+					ExternalTrafficPolicy:    string(corev1.ServiceExternalTrafficPolicyTypeLocal),
+					KafkaNodePort:            &kafkaNodePort,
+					MetricsNodePort:          &metricsNodePort,
+				},
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{},
+			S3: kafscalev1alpha1.S3Spec{
+				Bucket:               "snapshots",
+				Region:               "us-east-1",
+				CredentialsSecretRef: "creds",
+			},
+			Etcd: kafscalev1alpha1.EtcdSpec{
+				Endpoints: []string{"http://etcd:2379"},
+			},
 		},
 	}
 	if err := mgr.GetClient().Create(ctx, cluster); err != nil {
@@ -131,44 +138,61 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer waitCancel()
 	if err := wait.PollUntilContextTimeout(waitCtx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		if !resourceExists(ctx, mgr.GetClient(), &appsv1.StatefulSet{}, cluster.Namespace, cluster.Name+"-etcd") {
+		service := &corev1.Service{}
+		if !resourceExists(ctx, mgr.GetClient(), service, cluster.Namespace, cluster.Name+"-broker") {
 			return false, nil
 		}
-		if !resourceExists(ctx, mgr.GetClient(), &corev1.Service{}, cluster.Namespace, cluster.Name+"-etcd") {
+		deploy := &appsv1.Deployment{}
+		if !resourceExists(ctx, mgr.GetClient(), deploy, cluster.Namespace, cluster.Name+"-broker") {
 			return false, nil
 		}
-		if !resourceExists(ctx, mgr.GetClient(), &corev1.Service{}, cluster.Namespace, cluster.Name+"-etcd-client") {
+
+		if service.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			return false, nil
 		}
-		if !resourceExists(ctx, mgr.GetClient(), &policyv1.PodDisruptionBudget{}, cluster.Namespace, cluster.Name+"-etcd") {
+		if service.Spec.LoadBalancerIP != "203.0.113.10" {
 			return false, nil
 		}
-		if !resourceExists(ctx, mgr.GetClient(), &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-snapshot") {
+		if service.Annotations["cloud.example.com/lb"] != "external" {
+			return false, nil
+		}
+		if service.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyTypeLocal {
+			return false, nil
+		}
+		if len(service.Spec.LoadBalancerSourceRanges) != 1 || service.Spec.LoadBalancerSourceRanges[0] != "203.0.113.0/24" {
+			return false, nil
+		}
+		if len(service.Spec.Ports) != 2 {
+			return false, nil
+		}
+		if service.Spec.Ports[0].NodePort != kafkaNodePort {
+			return false, nil
+		}
+		if service.Spec.Ports[1].NodePort != metricsNodePort {
+			return false, nil
+		}
+
+		if len(deploy.Spec.Template.Spec.Containers) == 0 {
+			return false, nil
+		}
+		env := deploy.Spec.Template.Spec.Containers[0].Env
+		if envValue(env, "KAFSCALE_BROKER_HOST") != "kafka.example.com" {
+			return false, nil
+		}
+		if envValue(env, "KAFSCALE_BROKER_PORT") != fmt.Sprintf("%d", advertisedPort) {
 			return false, nil
 		}
 		return true, nil
 	}); err != nil {
-		t.Fatalf("expected managed etcd resources: %v", err)
+		t.Fatalf("expected external access config to reconcile: %v", err)
 	}
 }
 
-func envtestAssetsAvailable() bool {
-	assets := strings.TrimSpace(os.Getenv("KUBEBUILDER_ASSETS"))
-	if assets == "" {
-		assets = "/usr/local/kubebuilder/bin"
+func envValue(env []corev1.EnvVar, key string) string {
+	for _, entry := range env {
+		if entry.Name == key {
+			return entry.Value
+		}
 	}
-	etcdPath := filepath.Join(assets, "etcd")
-	kubeAPIServerPath := filepath.Join(assets, "kube-apiserver")
-	if _, err := os.Stat(etcdPath); err != nil {
-		return false
-	}
-	if _, err := os.Stat(kubeAPIServerPath); err != nil {
-		return false
-	}
-	return true
-}
-
-func resourceExists(ctx context.Context, c client.Reader, obj client.Object, ns, name string) bool {
-	err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, obj)
-	return err == nil || !apierrors.IsNotFound(err)
+	return ""
 }

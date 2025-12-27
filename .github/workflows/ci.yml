@@ -74,7 +74,7 @@ jobs:
         run: mkdir -p "$GOCACHE"
 
       - name: Enforce coverage floor
-        run: bash hack/check_coverage.sh 1
+        run: bash hack/check_coverage.sh 45
 
   helm-lint:
     name: Helm Lint

@@ -49,6 +49,41 @@ spec:
                       type: integer
                       minimum: 1
                       default: 3
+                    advertisedHost:
+                      type: string
+                      description: External hostname/IP clients should use when connecting.
+                    advertisedPort:
+                      type: integer
+                      description: External port clients should use when connecting.
+                    service:
+                      type: object
+                      description: Broker service exposure settings.
+                      properties:
+                        type:
+                          type: string
+                          description: Service type (ClusterIP, LoadBalancer, NodePort).
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                          description: Service annotations for cloud load balancers.
+                        loadBalancerIP:
+                          type: string
+                          description: Static IP for LoadBalancer services.
+                        loadBalancerSourceRanges:
+                          type: array
+                          items:
+                            type: string
+                          description: CIDR allowlist for LoadBalancer services.
+                        externalTrafficPolicy:
+                          type: string
+                          description: External traffic policy (Cluster or Local).
+                        kafkaNodePort:
+                          type: integer
+                          description: Optional node port for Kafka listener.
+                        metricsNodePort:
+                          type: integer
+                          description: Optional node port for metrics listener.
                     image:
                       type: object
                       properties:

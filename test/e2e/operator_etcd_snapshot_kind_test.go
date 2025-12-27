@@ -22,12 +22,15 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 const (
@@ -108,6 +111,16 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 
 	applyS3Secret(t, ctx, kindNamespace)
 	applyClusterManifest(t, ctx, kindNamespace)
+	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-etcd", 2*time.Minute); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
+		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
+	}
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
+	t.Log("waiting for etcd client port to accept connections")
+	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-etcd-client."+kindNamespace+".svc.cluster.local", []int{2379}); err != nil {
+		t.Fatalf("etcd client port sanity: %v", err)
+	}
 
 	if err := waitForResource(t, ctx, kindNamespace, "cronjob", "kafscale-etcd-snapshot", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
@@ -121,6 +134,35 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-broker."+kindNamespace+".svc.cluster.local", []int{9092, 9093}); err != nil {
 		t.Fatalf("broker port sanity: %v", err)
 	}
+
+	externalPort := findFreePort(t)
+	t.Logf("testing external access via port-forward (advertised 127.0.0.1:%d)", externalPort)
+	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", "127.0.0.1", externalPort)
+	waitForRollout(t, ctx, kindNamespace, "deployment/kafscale-broker", 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	t.Log("waiting for broker service ports after advertised endpoint update")
+	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-broker."+kindNamespace+".svc.cluster.local", []int{9092, 9093}); err != nil {
+		t.Fatalf("broker port sanity after update: %v", err)
+	}
+	portForwardCtx, portForwardCancel := context.WithCancel(ctx)
+	portForward := startPortForward(t, portForwardCtx, kindNamespace, "svc/kafscale-broker", externalPort, 9092)
+	t.Cleanup(func() {
+		portForwardCancel()
+		_ = portForward.Wait()
+	})
+	waitForLocalPort(t, fmt.Sprintf("127.0.0.1:%d", externalPort), 5*time.Second)
+	t.Log("external access: running host e2e client")
+	if err := runHostE2EClient(t, ctx, fmt.Sprintf("127.0.0.1:%d", externalPort), fmt.Sprintf("external-%08x", rand.Uint32()), 3); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
+		t.Fatalf("external access check failed: %v", err)
+	}
+	t.Log("external access: host e2e client finished")
+	internalHost := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local", kindNamespace)
+	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", internalHost, 9092)
+	waitForRollout(t, ctx, kindNamespace, "deployment/kafscale-broker", 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "create", "job", "etcd-snapshot-manual", "--from=cronjob/kafscale-etcd-snapshot")
@@ -469,6 +511,72 @@ spec:
     endpoints: []
 `, namespace, namespace)
 	runCmdWithInput(t, ctx, "kubectl", manifest, "apply", "-f", "-")
+}
+
+func patchClusterAdvertisedEndpoint(t *testing.T, ctx context.Context, namespace, name, host string, port int) {
+	t.Helper()
+	patch := fmt.Sprintf(`{"spec":{"brokers":{"advertisedHost":"%s","advertisedPort":%d}}}`, host, port)
+	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "patch", "kafscalecluster/"+name, "--type=merge", "-p", patch)
+}
+
+func startPortForward(t *testing.T, ctx context.Context, namespace, target string, localPort, remotePort int) *exec.Cmd {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "kubectl", "-n", namespace, "port-forward", target, fmt.Sprintf("%d:%d", localPort, remotePort))
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start port-forward: %v", err)
+	}
+	return cmd
+}
+
+func waitForLocalPort(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for local port %s", addr)
+}
+
+func findFreePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func runHostE2EClient(t *testing.T, ctx context.Context, brokerAddr, topic string, count int) error {
+	t.Helper()
+	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(brokerAddr),
+		kgo.AllowAutoTopicCreation(),
+	)
+	if err != nil {
+		return fmt.Errorf("create host client: %w", err)
+	}
+	defer client.Close()
+	for i := 0; i < count; i++ {
+		msg := fmt.Sprintf("external-%d", i)
+		if err := client.ProduceSync(runCtx, &kgo.Record{Topic: topic, Value: []byte(msg)}).FirstErr(); err != nil {
+			if runCtx.Err() != nil {
+				return fmt.Errorf("produce timed out: %w", runCtx.Err())
+			}
+			return fmt.Errorf("produce failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func runCmdWithInput(t *testing.T, ctx context.Context, name, input string, args ...string) {

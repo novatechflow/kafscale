@@ -90,7 +90,7 @@ KafScale brokers are stateless pods on Kubernetes. Metadata lives in etcd, while
 KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors handle downstream tasks by reading completed segments directly from S3, bypassing brokers entirely. Processors are stateless: offsets and leases live in etcd, input lives in S3, output goes to external catalogs.
 
 <div class="diagram">
-  <div class="diagram-label">Processor addon architecture</div>
+  <div class="diagram-label">Data processor architecture</div>
   <svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KafScale processor addon architecture">
     <defs>
       <marker id="ap1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">

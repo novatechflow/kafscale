@@ -118,7 +118,7 @@ func TestHandlerApiVersionsUnsupported(t *testing.T) {
 
 	header := &protocol.RequestHeader{
 		APIKey:        protocol.APIKeyApiVersion,
-		APIVersion:    1,
+		APIVersion:    4,
 		CorrelationID: 42,
 	}
 	payload, err := handler.Handle(context.Background(), header, &protocol.ApiVersionsRequest{})
@@ -295,12 +295,12 @@ func TestHandleCreateDeleteTopics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCreateTopics: %v", err)
 	}
-	resp := decodeCreateTopicsResponse(t, respBytes)
+	resp := decodeCreateTopicsResponse(t, respBytes, 0)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.NONE {
 		t.Fatalf("expected topic creation success: %#v", resp)
 	}
 	dupRespBytes, _ := handler.handleCreateTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 43}, createReq)
-	dupResp := decodeCreateTopicsResponse(t, dupRespBytes)
+	dupResp := decodeCreateTopicsResponse(t, dupRespBytes, 0)
 	if dupResp.Topics[0].ErrorCode != protocol.TOPIC_ALREADY_EXISTS {
 		t.Fatalf("expected duplicate error got %d", dupResp.Topics[0].ErrorCode)
 	}
@@ -309,7 +309,7 @@ func TestHandleCreateDeleteTopics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleDeleteTopics: %v", err)
 	}
-	delResp := decodeDeleteTopicsResponse(t, delBytes)
+	delResp := decodeDeleteTopicsResponse(t, delBytes, 0)
 	if len(delResp.Topics) != 2 || delResp.Topics[0].ErrorCode != protocol.NONE {
 		t.Fatalf("expected delete success, got %#v", delResp)
 	}
@@ -997,12 +997,17 @@ func readKafkaString(t *testing.T, reader *bytes.Reader) string {
 	return string(buf)
 }
 
-func decodeCreateTopicsResponse(t *testing.T, payload []byte) *protocol.CreateTopicsResponse {
+func decodeCreateTopicsResponse(t *testing.T, payload []byte, version int16) *protocol.CreateTopicsResponse {
 	t.Helper()
 	reader := bytes.NewReader(payload)
 	resp := &protocol.CreateTopicsResponse{}
 	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
 		t.Fatalf("read correlation id: %v", err)
+	}
+	if version >= 2 {
+		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
+			t.Fatalf("read throttle ms: %v", err)
+		}
 	}
 	var topicCount int32
 	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
@@ -1015,18 +1020,26 @@ func decodeCreateTopicsResponse(t *testing.T, payload []byte) *protocol.CreateTo
 		if err := binary.Read(reader, binary.BigEndian, &code); err != nil {
 			t.Fatalf("read error code: %v", err)
 		}
-		msg := readKafkaString(t, reader)
+		msg := ""
+		if version >= 1 {
+			msg = readKafkaString(t, reader)
+		}
 		resp.Topics = append(resp.Topics, protocol.CreateTopicResult{Name: name, ErrorCode: code, ErrorMessage: msg})
 	}
 	return resp
 }
 
-func decodeDeleteTopicsResponse(t *testing.T, payload []byte) *protocol.DeleteTopicsResponse {
+func decodeDeleteTopicsResponse(t *testing.T, payload []byte, version int16) *protocol.DeleteTopicsResponse {
 	t.Helper()
 	reader := bytes.NewReader(payload)
 	resp := &protocol.DeleteTopicsResponse{}
 	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
 		t.Fatalf("read correlation id: %v", err)
+	}
+	if version >= 1 {
+		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
+			t.Fatalf("read throttle ms: %v", err)
+		}
 	}
 	var topicCount int32
 	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
@@ -1039,8 +1052,7 @@ func decodeDeleteTopicsResponse(t *testing.T, payload []byte) *protocol.DeleteTo
 		if err := binary.Read(reader, binary.BigEndian, &code); err != nil {
 			t.Fatalf("read error code: %v", err)
 		}
-		msg := readKafkaString(t, reader)
-		resp.Topics = append(resp.Topics, protocol.DeleteTopicResult{Name: name, ErrorCode: code, ErrorMessage: msg})
+		resp.Topics = append(resp.Topics, protocol.DeleteTopicResult{Name: name, ErrorCode: code})
 	}
 	return resp
 }

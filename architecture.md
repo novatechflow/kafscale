@@ -132,7 +132,7 @@ KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors 
     <text x="30" y="138" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">PROCESSOR</text>
 
     <rect x="130" y="150" width="260" height="70" rx="12" fill="rgba(52, 211, 153, 0.12)" stroke="#34d399" stroke-width="2"/>
-    <text x="260" y="175" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg Processor</text>
+    <text x="260" y="175" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Processor</text>
     <text x="260" y="195" font-size="9" fill="var(--diagram-label)" text-anchor="middle">stateless pods · topic-scoped leases · HPA</text>
 
     <!-- S3 to Processor arrow -->
@@ -147,7 +147,7 @@ KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors 
     <text x="30" y="258" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">OUTPUT</text>
 
     <rect x="80" y="270" width="150" height="40" rx="10" fill="rgba(167, 139, 250, 0.15)" stroke="#a78bfa" stroke-width="1.5"/>
-    <text x="155" y="295" font-size="10" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg REST Catalog</text>
+    <text x="155" y="295" font-size="10" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Metadata Catalog</text>
 
     <rect x="260" y="270" width="130" height="40" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="1.5"/>
     <text x="325" y="295" font-size="10" font-weight="600" fill="#ffb347" text-anchor="middle">S3 Warehouse</text>
@@ -161,7 +161,7 @@ KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors 
     <text x="340" y="245" font-size="9" fill="#ffb347">parquet</text>
 
     <!-- Consumers on right side -->
-    <text x="520" y="258" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">CONSUMERS</text>
+    <text x="520" y="258" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">AGENTS / ANALYTICS</text>
 
     <rect x="520" y="270" width="130" height="40" rx="10" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
     <text x="585" y="290" font-size="9" fill="var(--diagram-text)" text-anchor="middle">Unity Catalog</text>

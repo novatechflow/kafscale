@@ -33,7 +33,10 @@ type Request interface {
 }
 
 // ApiVersionsRequest describes the ApiVersions call.
-type ApiVersionsRequest struct{}
+type ApiVersionsRequest struct {
+	ClientSoftwareName    string
+	ClientSoftwareVersion string
+}
 
 func (ApiVersionsRequest) APIKey() int16 { return APIKeyApiVersion }
 
@@ -101,13 +104,16 @@ type CreateTopicConfig struct {
 }
 
 type CreateTopicsRequest struct {
-	Topics []CreateTopicConfig
+	Topics       []CreateTopicConfig
+	TimeoutMs    int32
+	ValidateOnly bool
 }
 
 func (CreateTopicsRequest) APIKey() int16 { return APIKeyCreateTopics }
 
 type DeleteTopicsRequest struct {
 	TopicNames []string
+	TimeoutMs  int32
 }
 
 func (DeleteTopicsRequest) APIKey() int16 { return APIKeyDeleteTopics }
@@ -315,6 +321,8 @@ func (ListGroupsRequest) APIKey() int16 { return APIKeyListGroups }
 
 func isFlexibleRequest(apiKey, version int16) bool {
 	switch apiKey {
+	case APIKeyApiVersion:
+		return version >= 3
 	case APIKeyProduce:
 		return version >= 9
 	case APIKeyMetadata:
@@ -400,7 +408,32 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 	var req Request
 	switch header.APIKey {
 	case APIKeyApiVersion:
-		req = &ApiVersionsRequest{}
+		apiReq := &ApiVersionsRequest{}
+		if header.APIVersion >= 3 {
+			var err error
+			if flexible {
+				apiReq.ClientSoftwareName, err = reader.CompactString()
+			} else {
+				apiReq.ClientSoftwareName, err = reader.String()
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			if flexible {
+				apiReq.ClientSoftwareVersion, err = reader.CompactString()
+			} else {
+				apiReq.ClientSoftwareVersion, err = reader.String()
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			if flexible {
+				if err := reader.SkipTaggedFields(); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		req = apiReq
 	case APIKeyProduce:
 		var transactionalID *string
 		var err error
@@ -623,7 +656,17 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			}
 			configs = append(configs, CreateTopicConfig{Name: name, NumPartitions: partitions, ReplicationFactor: repl})
 		}
-		req = &CreateTopicsRequest{Topics: configs}
+		timeoutMs, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		validateOnly := false
+		if header.APIVersion >= 1 {
+			if validateOnly, err = reader.Bool(); err != nil {
+				return nil, nil, err
+			}
+		}
+		req = &CreateTopicsRequest{Topics: configs, TimeoutMs: timeoutMs, ValidateOnly: validateOnly}
 	case APIKeyDeleteTopics:
 		count, err := reader.Int32()
 		if err != nil {
@@ -637,7 +680,11 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			}
 			names = append(names, name)
 		}
-		req = &DeleteTopicsRequest{TopicNames: names}
+		timeoutMs, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		req = &DeleteTopicsRequest{TopicNames: names, TimeoutMs: timeoutMs}
 	case APIKeyListOffsets:
 		replicaID, err := reader.Int32()
 		if err != nil {

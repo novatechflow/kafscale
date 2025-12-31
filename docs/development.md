@@ -215,9 +215,9 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 15 | DescribeGroups | 5 | ✅ Implemented |
 | 16 | ListGroups | 5 | ✅ Implemented |
 | 17 | SaslHandshake | 1 | ❌ Authentication not in scope yet |
-| 18 | ApiVersions | 3 | ✅ Implemented (v0 only) |
-| 19 | CreateTopics | 7 | ✅ Implemented (v0 only) |
-| 20 | DeleteTopics | 6 | ✅ Implemented (v0 only) |
+| 18 | ApiVersions | 3 | ✅ Implemented (v0-3) |
+| 19 | CreateTopics | 7 | ✅ Implemented (v0-2) |
+| 20 | DeleteTopics | 6 | ✅ Implemented (v0-2) |
 | 21 | DeleteRecords | 2 | ❌ Rely on S3 lifecycle |
 | 22 | InitProducerId | 4 | ❌ Transactions out of scope |
 | 23 | OffsetForLeaderEpoch | 3 | ✅ Implemented |

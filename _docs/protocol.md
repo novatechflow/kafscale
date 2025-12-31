@@ -29,9 +29,9 @@ KafScale implements a focused subset of the Kafka protocol. Versions below refle
 | 14 | SyncGroup | 4 | Partition assignment (v4 only) |
 | 15 | DescribeGroups | 5 | Ops visibility |
 | 16 | ListGroups | 5 | Ops visibility |
-| 18 | ApiVersions | 0 | Client capability negotiation (v0 only) |
-| 19 | CreateTopics | 0 | Topic management (v0 only) |
-| 20 | DeleteTopics | 0 | Topic management (v0 only) |
+| 18 | ApiVersions | 0-3 | Client capability negotiation |
+| 19 | CreateTopics | 0-2 | Topic management |
+| 20 | DeleteTopics | 0-2 | Topic management |
 | 23 | OffsetForLeaderEpoch | 3 | Safe consumer recovery |
 | 32 | DescribeConfigs | 4 | Read topic/broker config |
 | 33 | AlterConfigs | 1 | Runtime config changes (whitelist) |

@@ -26,6 +26,7 @@ Before operating a production cluster:
 - **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
 - **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. In Helm, set `console.auth.username` and `console.auth.password`.
 - **TLS**: Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
+- **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies**: Allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Health/metrics**: Prometheus can scrape `/metrics` on brokers and operator for early detection of S3 pressure or degraded nodes.
 - **Startup gating**: Broker pods exit if they cannot read metadata or write a probe object to S3, so Kubernetes restarts them instead of leaving a stuck listener in place.

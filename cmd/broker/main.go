@@ -1634,7 +1634,10 @@ func parseEnvInt(name string, fallback int) int {
 		if parsed, err := strconv.Atoi(val); err == nil {
 			return parsed
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%d", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%d", fallback))
 	return fallback
 }
 
@@ -1643,7 +1646,10 @@ func parseEnvInt32(name string, fallback int32) int32 {
 		if parsed, err := strconv.ParseInt(val, 10, 32); err == nil {
 			return int32(parsed)
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%d", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%d", fallback))
 	return fallback
 }
 
@@ -1660,6 +1666,7 @@ func envOrDefault(name, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(name)); val != "" {
 		return val
 	}
+	warnDefaultEnv(name, "", fallback)
 	return fallback
 }
 
@@ -1668,7 +1675,10 @@ func parseEnvFloat(name string, fallback float64) float64 {
 		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
 			return parsed
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%g", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%g", fallback))
 	return fallback
 }
 
@@ -1680,8 +1690,26 @@ func parseEnvBool(name string, fallback bool) bool {
 		case "0", "false", "no", "off":
 			return false
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%t", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%t", fallback))
 	return fallback
+}
+
+func warnDefaultEnv(name, value, fallback string) {
+	if !isProdEnv() {
+		return
+	}
+	if value == "" {
+		slog.Warn("using default for unset env", "env", name, "default", fallback)
+		return
+	}
+	slog.Warn("using default for invalid env", "env", name, "value", value, "default", fallback)
+}
+
+func isProdEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KAFSCALE_ENV")), "prod")
 }
 
 type apiVersionSupport struct {

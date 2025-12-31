@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
@@ -58,5 +59,17 @@ func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
+	warnDefaultEnv(key, fallback)
 	return fallback
+}
+
+func warnDefaultEnv(key, fallback string) {
+	if !isProdEnv() {
+		return
+	}
+	log.Printf("using default for unset env %s=%s", key, fallback)
+}
+
+func isProdEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KAFSCALE_ENV")), "prod")
 }

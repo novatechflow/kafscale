@@ -173,7 +173,7 @@ KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors 
 
     <!-- Caption -->
     <text x="400" y="30" font-size="10" fill="var(--diagram-label)" text-anchor="middle" font-style="italic">
-      Processors bypass brokers entirely · State lives in etcd · Output to any Iceberg catalog
+      Processors bypass brokers entirely · State lives in etcd · Data Input S3 Flush
     </text>
   </svg>
 </div>

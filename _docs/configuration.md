@@ -28,7 +28,6 @@ All configuration is done via environment variables. Set these in your Helm valu
 | `KAFSCALE_CONTROL_ADDR` | `:9094` | Control-plane listen address |
 | `KAFSCALE_STARTUP_TIMEOUT_SEC` | `30` | Broker startup timeout |
 | `KAFSCALE_LOG_LEVEL` | `info` | Log level: debug, info, warn, error |
-| `KAFSCALE_TRACE_KAFKA` | `false` | Enable Kafka protocol tracing (verbose) |
 
 ### Segment and Flush Settings
 
@@ -61,6 +60,20 @@ Cache sizing guidance:
 |----------|---------|-------------|
 | `KAFSCALE_AUTO_CREATE_TOPICS` | `true` | Auto-create topics on first produce |
 | `KAFSCALE_AUTO_CREATE_PARTITIONS` | `1` | Partition count for auto-created topics |
+| `KAFSCALE_ALLOW_ADMIN_APIS` | `true` | Enable Create/Delete Topic APIs |
+
+### Durability Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFSCALE_PRODUCE_SYNC_FLUSH` | `true` | Flush to S3 on Produce when `acks != 0` |
+
+**Durability vs Cost tradeoff:**
+
+| Profile | Settings | Behavior |
+|---------|----------|----------|
+| Durability-optimized (default) | `SYNC_FLUSH=true`, `FLUSH_INTERVAL_MS=500`, `SEGMENT_BYTES=4MB` | Minimal data loss window after crash |
+| Cost-optimized | `SYNC_FLUSH=false`, `FLUSH_INTERVAL_MS=2000`, `SEGMENT_BYTES=32MB` | Fewer S3 PUTs, larger loss window |
 
 ### Metrics Settings
 
@@ -68,11 +81,12 @@ Cache sizing guidance:
 |----------|---------|-------------|
 | `KAFSCALE_THROUGHPUT_WINDOW_SEC` | `60` | Window for throughput metrics calculation |
 
-### Development Settings
+### Debug and Testing
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KAFSCALE_USE_MEMORY_S3` | `false` | Use in-memory S3 client (development only) |
+| `KAFSCALE_USE_MEMORY_S3` | `false` | Use in-memory S3 client (testing only, data not persisted) |
+| `KAFSCALE_TRACE_KAFKA` | `false` | Enable Kafka protocol tracing (verbose, impacts performance) |
 
 ---
 
@@ -190,6 +204,14 @@ spec:
 
 etcd stores topic metadata, consumer offsets, and cluster coordination state. It's the only stateful component you need to back up.
 
+### Endpoint Resolution Order
+
+The operator resolves etcd endpoints in this order:
+
+1. `KafScaleCluster.spec.etcd.endpoints` (CRD)
+2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` (env var)
+3. Managed etcd (operator creates a 3-node StatefulSet)
+
 ### Availability Signals
 
 When etcd is unavailable, brokers reject producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
@@ -244,6 +266,18 @@ The proxy discovers brokers via etcd by default. Use `KAFSCALE_PROXY_BACKENDS` f
 ```bash
 KAFSCALE_PROXY_BACKENDS=broker-0:9092,broker-1:9092,broker-2:9092
 ```
+
+### Helm Values
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `proxy.enabled` | `false` | Deploy the proxy |
+| `proxy.replicaCount` | `2` | Number of proxy replicas |
+| `proxy.advertisedHost` | | Public DNS clients should use |
+| `proxy.advertisedPort` | `9092` | Advertised port |
+| `proxy.etcdEndpoints` | | etcd endpoints array |
+| `proxy.service.type` | `ClusterIP` | Service type |
+| `proxy.service.port` | `9092` | Service port |
 
 ---
 

@@ -21,9 +21,11 @@ MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 MINIO_REGION="${MINIO_REGION:-us-east-1}"
 MODE="${1:-}"
+KAFSCALE_DEMO_BROKER_REPLICAS="${KAFSCALE_DEMO_BROKER_REPLICAS:-1}"
+KAFSCALE_DEMO_PROXY="${KAFSCALE_DEMO_PROXY:-0}"
 
 if [[ "$MODE" == "minio" ]]; then
-	cat <<EOF | kubectl apply -f -
+	cat <<EOF | kubectl apply --validate=false -f -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -66,7 +68,11 @@ spec:
 EOF
 
 elif [[ "$MODE" == "cluster" ]]; then
-	cat <<EOF | kubectl apply -f -
+	advertised_block=$'    advertisedHost: 127.0.0.1\n    advertisedPort: 39092'
+	if [[ "$KAFSCALE_DEMO_PROXY" == "1" ]]; then
+		advertised_block=$'    advertisedPort: 9092'
+	fi
+	cat <<EOF | kubectl apply --validate=false -f -
 apiVersion: kafscale.io/v1alpha1
 kind: KafscaleCluster
 metadata:
@@ -74,9 +80,8 @@ metadata:
   namespace: ${KAFSCALE_DEMO_NAMESPACE}
 spec:
   brokers:
-    advertisedHost: 127.0.0.1
-    advertisedPort: 39092
-    replicas: 1
+${advertised_block}
+    replicas: ${KAFSCALE_DEMO_BROKER_REPLICAS}
   s3:
     bucket: kafscale-snapshots
     region: ${MINIO_REGION}
@@ -86,7 +91,7 @@ spec:
     endpoints: []
 EOF
 
-	cat <<EOF | kubectl apply -f -
+	cat <<EOF | kubectl apply --validate=false -f -
 apiVersion: kafscale.io/v1alpha1
 kind: KafscaleTopic
 metadata:
@@ -105,7 +110,18 @@ spec:
   clusterRef: kafscale
   partitions: 2
 EOF
+elif [[ "$MODE" == "wait" ]]; then
+	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready kafscalecluster/kafscale --timeout=180s
+	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get svc kafscale-broker >/dev/null
+	selector="$(kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get svc kafscale-broker \
+		-o go-template='{{range $k,$v := .spec.selector}}{{printf "%s=%s," $k $v}}{{end}}')"
+	selector="${selector%,}"
+	if [[ -z "$selector" ]]; then
+		echo "broker service has no selector labels" >&2
+		exit 1
+	fi
+	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready pod -l "${selector}" --timeout=180s
 else
-	echo "usage: $0 [minio|cluster]" >&2
+	echo "usage: $0 [minio|cluster|wait]" >&2
 	exit 1
 fi

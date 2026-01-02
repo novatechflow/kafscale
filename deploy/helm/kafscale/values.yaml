@@ -65,6 +65,12 @@ console:
   auth:
     username: ""
     password: ""
+  etcdEndpoints: []
+  etcd:
+    username: ""
+    password: ""
+  metrics:
+    brokerMetricsURL: ""
   podAnnotations: {}
   resources: {}
   nodeSelector: {}
@@ -83,6 +89,30 @@ console:
           - path: /
             pathType: Prefix
     tls: []
+
+proxy:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: ghcr.io/novatechflow/kafscale-proxy
+    tag: ""
+    useLatest: false
+    pullPolicy: IfNotPresent
+  advertisedHost: ""
+  advertisedPort: 9092
+  etcdEndpoints: []
+  etcd:
+    username: ""
+    password: ""
+  backends: []
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: LoadBalancer
+    port: 9092
 
 mcp:
   enabled: false

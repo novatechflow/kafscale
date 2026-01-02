@@ -13,15 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform help
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform platform-demo help
 
 REGISTRY ?= ghcr.io/novatechflow
 STAMP_DIR ?= .build
 BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
+PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
+ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -31,9 +33,14 @@ MINIO_ROOT_USER ?= minioadmin
 MINIO_ROOT_PASSWORD ?= minioadmin
 MINIO_BUCKET ?= kafscale
 KAFSCALE_KIND_CLUSTER ?= kafscale-demo
+ifndef KAFSCALE_KIND_KUBECONFIG
+KAFSCALE_KIND_KUBECONFIG := $(shell mktemp -t kafscale-kind-kubeconfig.XXXXXX 2>/dev/null || mktemp)
+endif
 KAFSCALE_DEMO_NAMESPACE ?= kafscale-demo
 KAFSCALE_UI_USERNAME ?= kafscaleadmin
 KAFSCALE_UI_PASSWORD ?= kafscale
+KAFSCALE_DEMO_BROKER_REPLICAS ?= 2
+KAFSCALE_DEMO_PROXY ?= 1
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
 
@@ -49,7 +56,7 @@ test: ## Run unit tests + vet + race
 	go vet ./...
 	go test -race ./...
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-mcp docker-build-e2e-client ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -76,12 +83,19 @@ $(STAMP_DIR)/operator.image: $(OPERATOR_SRCS)
 	$(DOCKER_BUILD_CMD) -t $(OPERATOR_IMAGE) -f deploy/docker/operator.Dockerfile .
 	@touch $(STAMP_DIR)/operator.image
 
-CONSOLE_SRCS := $(shell find cmd/console ui go.mod go.sum)
+CONSOLE_SRCS := $(shell find cmd/console internal/console ui go.mod go.sum)
 docker-build-console: $(STAMP_DIR)/console.image ## Build console container image
 $(STAMP_DIR)/console.image: $(CONSOLE_SRCS)
 	@mkdir -p $(STAMP_DIR)
 	$(DOCKER_BUILD_CMD) -t $(CONSOLE_IMAGE) -f deploy/docker/console.Dockerfile .
 	@touch $(STAMP_DIR)/console.image
+
+PROXY_SRCS := $(shell find cmd/proxy pkg go.mod go.sum)
+docker-build-proxy: $(STAMP_DIR)/proxy.image ## Build proxy container image
+$(STAMP_DIR)/proxy.image: $(PROXY_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
+	@touch $(STAMP_DIR)/proxy.image
 
 MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
 docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
@@ -97,10 +111,17 @@ $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
 	$(DOCKER_BUILD_CMD) -t $(E2E_CLIENT_IMAGE) -f deploy/docker/e2e-client.Dockerfile .
 	@touch $(STAMP_DIR)/e2e-client.image
 
+ETCD_TOOLS_SRCS := deploy/docker/etcd-tools.Dockerfile
+docker-build-etcd-tools: $(STAMP_DIR)/etcd-tools.image ## Build etcd tools container image (etcdctl/etcdutl + shell)
+$(STAMP_DIR)/etcd-tools.image: $(ETCD_TOOLS_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) -t $(ETCD_TOOLS_IMAGE) -f deploy/docker/etcd-tools.Dockerfile .
+	@touch $(STAMP_DIR)/etcd-tools.image
+
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force
@@ -110,6 +131,16 @@ stop-containers: ## Stop lingering e2e containers (MinIO + kind control planes) 
 	-ids=$$(docker ps -q --filter "name=kafscale-minio"); if [ -n "$$ids" ]; then docker stop $$ids >/dev/null; fi
 	-ids=$$(docker ps -q --filter "name=kafscale-e2e"); if [ -n "$$ids" ]; then docker stop $$ids >/dev/null; fi
 	-$(MAKE) release-broker-ports
+
+clean-kind-e2e: ## Delete kafscale-e2e* kind clusters without stopping MinIO.
+	@filter_cmd="rg '^kafscale-e2e'"; \
+	if ! command -v rg >/dev/null 2>&1; then \
+	  filter_cmd="grep -E '^kafscale-e2e'"; \
+	fi; \
+	clusters=$$(kind get clusters | eval $$filter_cmd); \
+	if [ -n "$$clusters" ]; then \
+	  echo "$$clusters" | while read -r name; do kind delete cluster --name $$name; done; \
+	fi
 
 ensure-minio: ## Ensure the local MinIO helper container is running and reachable
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required for MinIO-backed e2e tests"; exit 1; }
@@ -197,6 +228,7 @@ test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test-produce-consume
 
 test-operator: docker-build ## Run operator envtest + kind snapshot e2e (requires kind/kubectl/helm for kind).
+	@$(MAKE) clean-kind-e2e
 	@SETUP_ENVTEST=$$(command -v setup-envtest || true); \
 	if [ -z "$$SETUP_ENVTEST" ]; then \
 		GOBIN=$$(go env GOBIN); \
@@ -234,59 +266,48 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
 	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
 	@if ! kind get clusters | grep -q '^$(KAFSCALE_KIND_CLUSTER)$$'; then kind create cluster --name $(KAFSCALE_KIND_CLUSTER); fi
+	@kind get kubeconfig --name $(KAFSCALE_KIND_CLUSTER) > $(KAFSCALE_KIND_KUBECONFIG)
 	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	@kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: apps/v1
-	kind: Deployment
-	metadata:
-	  name: minio
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  replicas: 1
-	  selector:
-	    matchLabels:
-	      app: minio
-	  template:
-	    metadata:
-	      labels:
-	        app: minio
-	    spec:
-	      containers:
-	        - name: minio
-	          image: $(MINIO_IMAGE)
-	          args: ["server", "/data", "--console-address", ":9001"]
-	          env:
-	            - name: MINIO_ROOT_USER
-	              value: $(MINIO_ROOT_USER)
-	            - name: MINIO_ROOT_PASSWORD
-	              value: $(MINIO_ROOT_PASSWORD)
-	          ports:
-	            - containerPort: 9000
-	---
-	apiVersion: v1
-	kind: Service
-	metadata:
-	  name: minio
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  selector:
-	    app: minio
-	  ports:
-	    - name: api
-	      port: 9000
-	      targetPort: 9000
-	EOF
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/minio --timeout=120s
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) create secret generic kafscale-s3-credentials \
+	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | \
+	  KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl apply --validate=false -f -
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	  MINIO_IMAGE=$(MINIO_IMAGE) \
+	  MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	  MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	  scripts/demo-platform-apply.sh minio
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/minio --timeout=120s
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl -n $(KAFSCALE_DEMO_NAMESPACE) create secret generic kafscale-s3-credentials \
 	  --from-literal=KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	  --from-literal=KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
-	  --dry-run=client -o yaml | kubectl apply -f -
+	  --dry-run=client -o yaml | KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl apply --validate=false -f -
 	@OPERATOR_REPO=$${OPERATOR_IMAGE%:*}; OPERATOR_TAG=$${OPERATOR_IMAGE##*:}; \
+	if [ -z "$$OPERATOR_REPO" ] || [ "$$OPERATOR_REPO" = "$$OPERATOR_TAG" ]; then \
+	  echo "OPERATOR_IMAGE missing repository, defaulting to $(REGISTRY)/kafscale-operator"; \
+	  OPERATOR_REPO=$(REGISTRY)/kafscale-operator; \
+	  if [ "$$OPERATOR_TAG" = "$$OPERATOR_IMAGE" ] || [ -z "$$OPERATOR_TAG" ]; then \
+	    OPERATOR_TAG=dev; \
+	  fi; \
+	fi; \
 	CONSOLE_REPO=$${CONSOLE_IMAGE%:*}; CONSOLE_TAG=$${CONSOLE_IMAGE##*:}; \
-	helm upgrade --install kafscale deploy/helm/kafscale \
+	if [ -z "$$CONSOLE_REPO" ] || [ "$$CONSOLE_REPO" = "$$CONSOLE_TAG" ]; then \
+	  echo "CONSOLE_IMAGE missing repository, defaulting to $(REGISTRY)/kafscale-console"; \
+	  CONSOLE_REPO=$(REGISTRY)/kafscale-console; \
+	  if [ "$$CONSOLE_TAG" = "$$CONSOLE_IMAGE" ] || [ -z "$$CONSOLE_TAG" ]; then \
+	    CONSOLE_TAG=dev; \
+	  fi; \
+	fi; \
+	PROXY_REPO=$${PROXY_IMAGE%:*}; PROXY_TAG=$${PROXY_IMAGE##*:}; \
+	if [ -z "$$PROXY_REPO" ] || [ "$$PROXY_REPO" = "$$PROXY_TAG" ]; then \
+	  echo "PROXY_IMAGE missing repository, defaulting to $(REGISTRY)/kafscale-proxy"; \
+	  PROXY_REPO=$(REGISTRY)/kafscale-proxy; \
+	  if [ "$$PROXY_TAG" = "$$PROXY_IMAGE" ] || [ -z "$$PROXY_TAG" ]; then \
+	    PROXY_TAG=dev; \
+	  fi; \
+	fi; \
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) helm upgrade --install kafscale deploy/helm/kafscale \
 	  --namespace $(KAFSCALE_DEMO_NAMESPACE) \
 	  --create-namespace \
 	  --set operator.replicaCount=2 \
@@ -296,60 +317,41 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  --set console.image.tag=$$CONSOLE_TAG \
 	  --set console.auth.username=$(KAFSCALE_UI_USERNAME) \
 	  --set console.auth.password=$(KAFSCALE_UI_PASSWORD) \
-	  --set operator.etcdEndpoints[0]=
-	@OPERATOR_DEPLOY=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployments -l app.kubernetes.io/component=operator -o jsonpath='{.items[0].metadata.name}'); \
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$OPERATOR_DEPLOY \
-	  BROKER_IMAGE=$(BROKER_IMAGE) \
-	  KAFSCALE_OPERATOR_ETCD_ENDPOINTS= \
-	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET=kafscale-snapshots \
-	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1 \
-	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
-	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleCluster
-	metadata:
-	  name: kafscale
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  brokers:
-	    advertisedHost: 127.0.0.1
-	    advertisedPort: 39092
-	    replicas: 1
-	  s3:
-	    bucket: kafscale-snapshots
-	    region: $(MINIO_REGION)
-	    endpoint: http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000
-	    credentialsSecretRef: kafscale-s3-credentials
-	  etcd:
-	    endpoints: []
-	EOF
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleTopic
-	metadata:
-	  name: demo-topic-1
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  clusterRef: kafscale
-	  partitions: 3
-	---
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleTopic
-	metadata:
-	  name: demo-topic-2
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  clusterRef: kafscale
-	  partitions: 2
-	EOF
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) wait --for=condition=available deployment/kafscale-broker --timeout=180s
-	@bash -c 'set -euo pipefail; \
+	  --set console.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 \
+	  --set console.metrics.brokerMetricsURL=http://kafscale-broker.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9093/metrics \
+	  --set operator.etcdEndpoints[0]= \
+	  $$( [ "$(KAFSCALE_DEMO_PROXY)" = "1" ] && echo "--set proxy.enabled=true --set proxy.image.repository=$$PROXY_REPO --set proxy.image.tag=$$PROXY_TAG --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 --set proxy.advertisedHost=127.0.0.1 --set proxy.advertisedPort=39092 --set proxy.service.type=ClusterIP --set proxy.service.port=9092" )
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
+	  OPERATOR_DEPLOY=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployments -l app.kubernetes.io/component=operator -o jsonpath="{.items[0].metadata.name}"); \
+	  if [ -z "$$OPERATOR_DEPLOY" ]; then \
+	    echo "operator deployment not found"; \
+	    exit 1; \
+	  fi; \
+	  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$OPERATOR_DEPLOY \
+	    BROKER_IMAGE=$(BROKER_IMAGE) \
+	    KAFSCALE_OPERATOR_ETCD_ENDPOINTS= \
+	    KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1 \
+	    KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
+	    KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000; \
+	  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s; \
+	'
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	  KAFSCALE_DEMO_BROKER_REPLICAS=$(KAFSCALE_DEMO_BROKER_REPLICAS) \
+	  KAFSCALE_DEMO_PROXY=$(KAFSCALE_DEMO_PROXY) \
+	  MINIO_REGION=$(MINIO_REGION) \
+	  scripts/demo-platform-apply.sh cluster
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	  scripts/demo-platform-apply.sh wait
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
 		console_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
 		kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
 		console_pid=$$!; \
-		kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/kafscale-broker 39092:9092 >/tmp/kafscale-demo-broker.log 2>&1 & \
+		if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then \
+		  proxy_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=proxy -o jsonpath="{.items[0].metadata.name}"); \
+		  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/$$proxy_svc 39092:9092 >/tmp/kafscale-demo-proxy.log 2>&1 & \
+		else \
+		  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/kafscale-broker 39092:9092 >/tmp/kafscale-demo-broker.log 2>&1 & \
+		fi; \
 		broker_pid=$$!; \
 		trap "kill $$console_pid $$broker_pid" EXIT INT TERM; \
 		echo "Console available at http://127.0.0.1:8080/ui/ (logs: /tmp/kafscale-demo-console.log)"; \
@@ -358,6 +360,8 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 		KAFSCALE_DEMO_TOPICS=demo-topic-1,demo-topic-2 \
 		go run ./cmd/demo-workload; \
 	'
+
+platform-demo: demo-platform ## Alias for demo-platform.
 
 demo: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop).
 	KAFSCALE_E2E=1 \

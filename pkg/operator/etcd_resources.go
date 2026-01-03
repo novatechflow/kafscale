@@ -177,7 +177,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 	}}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, sts, func() error {
 		labels := etcdLabels(cluster)
-		replicas := int32(etcdReplicas())
+		replicas := etcdReplicas()
 		sts.Labels = labels
 		sts.Spec.ServiceName = fmt.Sprintf("%s-etcd", cluster.Name)
 		sts.Spec.Replicas = &replicas
@@ -281,7 +281,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				)
 			}
 			peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
-			initialCluster := buildEtcdInitialCluster(cluster, etcdReplicas())
+			initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
 			restoreScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
@@ -395,7 +395,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 
 func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
-	initialCluster := buildEtcdInitialCluster(cluster, etcdReplicas())
+	initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
 	peerURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2380", peerSvc)
 	clientURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2379", peerSvc)
 	return []string{
@@ -708,16 +708,16 @@ func boolToString(val bool) string {
 	return "0"
 }
 
-func etcdReplicas() int {
+func etcdReplicas() int32 {
 	raw := strings.TrimSpace(os.Getenv(operatorEtcdReplicasEnv))
 	if raw == "" {
-		return defaultEtcdReplicas
+		return int32(defaultEtcdReplicas)
 	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < defaultEtcdReplicas {
-		return defaultEtcdReplicas
+	parsed, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || parsed < int64(defaultEtcdReplicas) {
+		return int32(defaultEtcdReplicas)
 	}
-	return parsed
+	return int32(parsed)
 }
 
 func stringPtrOrNil(val string) *string {

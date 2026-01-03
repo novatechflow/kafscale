@@ -68,7 +68,7 @@ func main() {
 		if count <= 0 {
 			log.Fatalf("KAFSCALE_E2E_COUNT must be > 0")
 		}
-		partition := parseEnvInt("KAFSCALE_E2E_PARTITION", -1)
+		partition := parseEnvInt32("KAFSCALE_E2E_PARTITION", -1)
 		offsetOverride := parseEnvInt64("KAFSCALE_E2E_OFFSET", -1)
 		var opts []kgo.Opt
 		opts = append(opts, kgo.SeedBrokers(brokerAddr))
@@ -78,7 +78,7 @@ func main() {
 				offset = kgo.NewOffset().At(offsetOverride)
 			}
 			partitions := map[string]map[int32]kgo.Offset{
-				topic: {int32(partition): offset},
+				topic: {partition: offset},
 			}
 			opts = append(opts, kgo.ConsumePartitions(partitions))
 		} else {
@@ -254,6 +254,18 @@ func parseEnvInt(name string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func parseEnvInt32(name string, fallback int32) int32 {
+	val := strings.TrimSpace(os.Getenv(name))
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(val, 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(parsed)
 }
 
 func parseEnvInt64(name string, fallback int64) int64 {

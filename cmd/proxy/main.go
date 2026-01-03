@@ -125,7 +125,7 @@ func envPort(key string, fallback int) int32 {
 	if val == "" {
 		return int32(fallback)
 	}
-	parsed, err := strconv.Atoi(val)
+	parsed, err := strconv.ParseInt(val, 10, 32)
 	if err != nil || parsed <= 0 {
 		return int32(fallback)
 	}
@@ -602,8 +602,8 @@ func (p *proxy) buildNotReadyResponse(header *protocol.RequestHeader, payload []
 			partitions := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
 			for _, part := range topic.Partitions {
 				partitions = append(partitions, protocol.FetchPartitionResponse{
-					Partition:    part.Partition,
-					ErrorCode:    protocol.REQUEST_TIMED_OUT,
+					Partition:     part.Partition,
+					ErrorCode:     protocol.REQUEST_TIMED_OUT,
 					HighWatermark: 0,
 				})
 			}
@@ -887,8 +887,8 @@ func (p *proxy) buildNotReadyResponse(header *protocol.RequestHeader, payload []
 
 func generateProxyApiVersions() []protocol.ApiVersion {
 	supported := []struct {
-		key        int16
-		min, max   int16
+		key      int16
+		min, max int16
 	}{
 		{key: protocol.APIKeyApiVersion, min: 0, max: 4},
 		{key: protocol.APIKeyMetadata, min: 0, max: 12},

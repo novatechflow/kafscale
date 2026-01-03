@@ -2034,7 +2034,7 @@ func podOrdinal(name string) (int32, bool) {
 	if idx == -1 || idx == len(name)-1 {
 		return 0, false
 	}
-	ord, err := strconv.Atoi(name[idx+1:])
+	ord, err := strconv.ParseInt(name[idx+1:], 10, 32)
 	if err != nil {
 		return 0, false
 	}

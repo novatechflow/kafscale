@@ -128,7 +128,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Typical latency</span><span>~10ms p99 (with EBS WAL)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
-    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">BSL</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">Apache 2.0*</span></div>
     <div class="spec-row"><span class="spec-label">Best for</span><span>Kafka migration, low latency + S3</span></div>
   </section>
 

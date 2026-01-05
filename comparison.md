@@ -23,23 +23,23 @@ Licensing determines your long-term flexibility. This matters more than most ven
   <div class="format-row" style="background: rgba(14, 165, 233, 0.08);">
     <span><strong>KafScale</strong></span>
     <span><span class="badge badge-success">Apache 2.0</span></span>
-    <span>Use, modify, redistribute freely. No restrictions ever.</span>
+    <span>Use, modify, redistribute freely. No restrictions ever. Open source from the beginning</span>
   </div>
   <div class="format-row">
     <span>Apache Kafka</span>
     <span><span class="badge badge-success">Apache 2.0</span></span>
-    <span>Fully open source. No restrictions.</span>
+    <span>Fully open source. No restrictions. Open source from the beginning.</span>
   </div>
   <div class="format-row">
     <span>Redpanda</span>
     <span><span class="badge badge-warning">BSL 1.1</span></span>
     <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
   </div>
-  <div class="format-row">
-    <span>AutoMQ</span>
-    <span><span class="badge badge-warning">BSL</span></span>
-    <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
-  </div>
+ <div class="format-row">
+  <span>AutoMQ</span>
+  <span><span class="badge badge-warning">Apache 2.0*</span></span>
+  <span>Was BSL until May 2025. Changed for Strimzi compatibility to support K8s rollouts.</span>
+</div>
   <div class="format-row">
     <span>WarpStream</span>
     <span><span class="badge badge-danger">Proprietary</span></span>
@@ -128,7 +128,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Typical latency</span><span>~10ms p99 (with EBS WAL)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
-    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">BSL</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">Apache 2.0*</span></div>
     <div class="spec-row"><span class="spec-label">Best for</span><span>Kafka migration, low latency + S3</span></div>
   </section>
 

@@ -36,7 +36,8 @@ The console UI and Grafana dashboard templates are built on the same metrics.
 - **Operator metrics** – `http://<operator-host>:8080/metrics`
 
 In local development, the console can scrape broker metrics if you set
-`KAFSCALE_CONSOLE_BROKER_METRICS_URL`.
+`KAFSCALE_CONSOLE_BROKER_METRICS_URL`. Operator metrics can be wired into the
+console via `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`.
 
 ## ISR Terminology
 
@@ -58,6 +59,15 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_s3_state_duration_seconds` | Gauge | - | Seconds spent in the current S3 health state. |
 | `kafscale_produce_rps` | Gauge | - | Produce requests per second (sliding window). |
 | `kafscale_fetch_rps` | Gauge | - | Fetch requests per second (sliding window). |
+| `kafscale_produce_latency_ms` | Histogram | - | Produce request latency distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag` | Histogram | - | Consumer lag distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag_max` | Gauge | - | Maximum observed consumer lag. |
+| `kafscale_broker_uptime_seconds` | Gauge | - | Seconds since broker start. |
+| `kafscale_broker_cpu_percent` | Gauge | - | Process CPU usage percent between scrapes. |
+| `kafscale_broker_mem_alloc_bytes` | Gauge | - | Allocated heap bytes. |
+| `kafscale_broker_mem_sys_bytes` | Gauge | - | Memory obtained from the OS. |
+| `kafscale_broker_heap_inuse_bytes` | Gauge | - | Heap in-use bytes. |
+| `kafscale_broker_goroutines` | Gauge | - | Number of goroutines. |
 | `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
 | `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
 | `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
@@ -84,10 +94,130 @@ Operator metrics are exported by the controller runtime metrics server.
 
 The `cluster` label uses `namespace/name`.
 
+## Kubernetes ServiceMonitor
+
+If you're using the Prometheus Operator, create a `ServiceMonitor` to scrape KafScale:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafscale-brokers
+  labels:
+    app: kafscale
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafscale
+      app.kubernetes.io/component: broker
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafscale-operator
+  labels:
+    app: kafscale
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafscale
+      app.kubernetes.io/component: operator
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+```
+
+## Recommended Alert Rules
+
+Example Prometheus alerting rules for production deployments:
+
+{% raw %}
+```yaml
+groups:
+  - name: kafscale
+    rules:
+      - alert: KafScaleS3Unhealthy
+        expr: kafscale_s3_health_state{state="healthy"} != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "KafScale S3 connection unhealthy"
+          description: "Broker {{ $labels.instance }} has been in non-healthy S3 state for 2+ minutes."
+
+      - alert: KafScaleHighProduceLatency
+        expr: histogram_quantile(0.95, rate(kafscale_produce_latency_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KafScale produce latency elevated"
+          description: "P95 produce latency on {{ $labels.instance }} exceeds 500ms."
+
+      - alert: KafScaleConsumerLagHigh
+        expr: kafscale_consumer_lag_max > 100000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KafScale consumer lag high"
+          description: "Consumer lag on {{ $labels.instance }} exceeds 100k messages."
+
+      - alert: KafScaleEtcdSnapshotStale
+        expr: kafscale_operator_etcd_snapshot_stale == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KafScale etcd snapshot stale"
+          description: "Cluster {{ $labels.cluster }} has not had a successful snapshot recently."
+
+      - alert: KafScaleS3ErrorRateHigh
+        expr: kafscale_s3_error_rate > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KafScale S3 error rate elevated"
+          description: "S3 error rate on {{ $labels.instance }} exceeds 5%."
+
+      - alert: KafScaleBrokerDown
+        expr: up{job="kafscale-brokers"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "KafScale broker unreachable"
+          description: "Broker {{ $labels.instance }} is not responding to scrapes."
+```
+{% endraw %}
+
+Tune thresholds based on your workload. KafScale's S3-native architecture means
+produce latencies are inherently higher than traditional Kafka (expect 200-400ms
+typical), so adjust `KafScaleHighProduceLatency` accordingly.
+
 ## Grafana Dashboard
 
 The Grafana template lives in `docs/grafana/broker-dashboard.json`. It expects
 Prometheus to scrape both broker and operator metrics endpoints.
+
+Import the dashboard via Grafana UI or provision it in your Grafana deployment:
+
+```yaml
+# Example provisioning config
+apiVersion: 1
+providers:
+  - name: KafScale
+    folder: KafScale
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards/kafscale
+```
 
 ## Metric Coverage
 

@@ -6,8 +6,8 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 
 <section class="hero">
   <p class="eyebrow">Apache 2.0 licensed. No vendor lock-in. Self-hosted.</p>
-  <h1>Stateless Kafka on S3, compatible with your clients.</h1>
-  <p>Run Kafka APIs without stateful disks. KafScale stores segments in S3, keeps brokers ephemeral, and lets processors read directly from storage. Scale streaming and analytics independently. Give AI agents what they actually need: immutable logs, full replay, and complete context.</p>
+  <h1>Stateless Kafka on S3. Scale brokers, not partitions.</h1>
+  <p>Stateless brokers backed by S3. No rebalancing, no disk alerts, no partition shuffles. Processors read directly from storage — streaming and analytics never compete.</p>
   <div class="badge-row">
     <img alt="GitHub stars" src="https://img.shields.io/github/stars/novatechflow/kafscale?style=flat" />
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />

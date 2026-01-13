@@ -73,7 +73,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
-          images: ghcr.io/novatechflow/${{ matrix.image }}
+          images: ghcr.io/kafscale/${{ matrix.image }}
           tags: |
             type=ref,event=tag
 

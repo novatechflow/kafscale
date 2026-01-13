@@ -17,13 +17,13 @@ limitations under the License.
 
 # KafScale
 
-[![CI](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/badge/codeql-enabled-2ea44f?logo=github)](https://github.com/novatechflow/kafscale/security/code-scanning)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/novatechflow/kafscale/badge)](https://securityscorecards.dev/viewer/?uri=github.com/novatechflow/kafscale)
-[![Release](https://img.shields.io/github/v/release/novatechflow/kafscale?include_prereleases&sort=semver)](https://github.com/novatechflow/kafscale/releases)
-[![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/novatechflow/kafscale/pkgs/container/kafscale-broker)
+[![CI](https://github.com/KafScale/platform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KafScale/platform/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/badge/codeql-enabled-2ea44f?logo=github)](https://github.com/KafScale/platform/security/code-scanning)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/KafScale/platform/badge)](https://securityscorecards.dev/viewer/?uri=github.com/KafScale/platform)
+[![Release](https://img.shields.io/github/v/release/KafScale/platform?include_prereleases&sort=semver)](https://github.com/KafScale/platform/releases)
+[![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/KafScale/platform/pkgs/container/kafscale-broker)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen)](https://goreportcard.com/report/github.com/novatechflow/kafscale)
+[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen)](https://goreportcard.com/report/github.com/KafScale/platform)
 
 KafScale is a Kafka-protocol compatible streaming platform built around a simple premise:  
 **durable logs belong in object storage, not in stateful brokers**.

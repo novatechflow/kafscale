@@ -75,7 +75,7 @@ mcp:
     name: kafscale-mcp
     create: true
   image:
-    repository: ghcr.io/novatechflow/kafscale-mcp
+    repository: ghcr.io/kafscale/kafscale-mcp
     tag: v0.1.0
   auth:
     token: "<bearer-token>"

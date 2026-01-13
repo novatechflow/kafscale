@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	defaultBrokerImage           = "ghcr.io/novatechflow/kafscale-broker:latest"
+	defaultBrokerImage           = "ghcr.io/kafscale/kafscale-broker:latest"
 	defaultBrokerImagePullPolicy = string(corev1.PullIfNotPresent)
 	publishRequeueDelay          = 5 * time.Second
 )

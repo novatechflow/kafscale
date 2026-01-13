@@ -54,7 +54,7 @@ const (
 	operatorEtcdStorageMemoryEnv         = "KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY"
 
 	defaultEtcdImage                 = "kubesphere/etcd:3.6.4-0"
-	defaultEtcdctlImage              = "ghcr.io/novatechflow/kafscale-etcd-tools:dev"
+	defaultEtcdctlImage              = "ghcr.io/kafscale/kafscale-etcd-tools:dev"
 	defaultEtcdStorageSize           = "10Gi"
 	defaultEtcdReplicas              = 3
 	defaultSnapshotBucketPrefix      = "kafscale-etcd"

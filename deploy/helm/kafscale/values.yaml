@@ -25,16 +25,16 @@ rbac:
 operator:
   replicaCount: 2
   image:
-    repository: ghcr.io/novatechflow/kafscale-operator
+    repository: ghcr.io/kafscale/kafscale-operator
     tag: ""
     useLatest: false
     pullPolicy: IfNotPresent
   brokerImage:
-    repository: ghcr.io/novatechflow/kafscale-broker
+    repository: ghcr.io/kafscale/kafscale-broker
     tag: ""
     useLatest: false
   etcdSnapshotEtcdctlImage:
-    repository: ghcr.io/novatechflow/kafscale-etcd-tools
+    repository: ghcr.io/kafscale/kafscale-etcd-tools
     tag: ""
     useLatest: false
   etcdReplicas: 3
@@ -67,7 +67,7 @@ console:
   enabled: true
   replicaCount: 1
   image:
-    repository: ghcr.io/novatechflow/kafscale-console
+    repository: ghcr.io/kafscale/kafscale-console
     tag: ""
     useLatest: false
     pullPolicy: IfNotPresent
@@ -104,7 +104,7 @@ proxy:
   enabled: false
   replicaCount: 2
   image:
-    repository: ghcr.io/novatechflow/kafscale-proxy
+    repository: ghcr.io/kafscale/kafscale-proxy
     tag: ""
     useLatest: false
     pullPolicy: IfNotPresent
@@ -135,7 +135,7 @@ mcp:
     create: true
   replicaCount: 1
   image:
-    repository: ghcr.io/novatechflow/kafscale-mcp
+    repository: ghcr.io/kafscale/kafscale-mcp
     tag: ""
     useLatest: false
     pullPolicy: IfNotPresent

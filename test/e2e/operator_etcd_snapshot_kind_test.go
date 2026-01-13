@@ -73,11 +73,11 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	applyMinio(t, ctx, kindNamespace)
 	waitForRollout(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
 
-	brokerImage := envOrDefault("KAFSCALE_BROKER_IMAGE", "ghcr.io/novatechflow/kafscale-broker:dev")
-	operatorImage := envOrDefault("KAFSCALE_OPERATOR_IMAGE", "ghcr.io/novatechflow/kafscale-operator:dev")
-	consoleImage := envOrDefault("KAFSCALE_CONSOLE_IMAGE", "ghcr.io/novatechflow/kafscale-console:dev")
-	e2eClientImage := envOrDefault("KAFSCALE_E2E_CLIENT_IMAGE", "ghcr.io/novatechflow/kafscale-e2e-client:dev")
-	etcdToolsImage := envOrDefault("KAFSCALE_ETCD_TOOLS_IMAGE", "ghcr.io/novatechflow/kafscale-etcd-tools:dev")
+	brokerImage := envOrDefault("KAFSCALE_BROKER_IMAGE", "ghcr.io/kafscale/kafscale-broker:dev")
+	operatorImage := envOrDefault("KAFSCALE_OPERATOR_IMAGE", "ghcr.io/kafscale/kafscale-operator:dev")
+	consoleImage := envOrDefault("KAFSCALE_CONSOLE_IMAGE", "ghcr.io/kafscale/kafscale-console:dev")
+	e2eClientImage := envOrDefault("KAFSCALE_E2E_CLIENT_IMAGE", "ghcr.io/kafscale/kafscale-e2e-client:dev")
+	etcdToolsImage := envOrDefault("KAFSCALE_ETCD_TOOLS_IMAGE", "ghcr.io/kafscale/kafscale-etcd-tools:dev")
 
 	requireImage(t, ctx, brokerImage)
 	requireImage(t, ctx, operatorImage)

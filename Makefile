@@ -15,7 +15,7 @@
 
 .PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo platform-demo help clean-kind-all
 
-REGISTRY ?= ghcr.io/novatechflow
+REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
 BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev

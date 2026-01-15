@@ -15,21 +15,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# KAFSQL Processor (Draft)
+# KAFSQL Processor
 
 KAFSQL is a storage-native SQL processor that reads Kafscale KFS segments from
 S3 and exposes a Postgres wire protocol endpoint for ad-hoc queries. It is
 stateless, uses S3 as source of truth, and targets the 80% of Kafka data
 questions that are simple and time-bounded.
 
-## What It Will Do (v0.6 scope)
+## What It Will Do
 
 - Read KFS segments directly from S3 (no broker dependency).
 - Expose Postgres wire protocol for JDBC/BI compatibility.
 - Support single-topic queries plus bounded two-topic joins.
 - Provide Kafka-native SQL extensions (`LAST`, `TAIL`, `SCAN FULL`).
 
-## What It Will Not Do (v0.6)
+## What It Will Not Do
 
 - Continuous streaming queries or materialized views.
 - Full SQL feature parity or multi-join chains.

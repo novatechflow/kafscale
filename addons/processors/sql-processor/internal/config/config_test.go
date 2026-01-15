@@ -37,14 +37,23 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Query.MaxScanBytes == 0 || cfg.Query.MaxScanSegments == 0 || cfg.Query.MaxRows == 0 || cfg.Query.TimeoutSeconds == 0 {
 		t.Fatalf("expected query guardrail defaults")
 	}
+	if cfg.Query.MaxConcurrent == 0 || cfg.Query.QueueSize == 0 || cfg.Query.QueueTimeoutSec == 0 {
+		t.Fatalf("expected query queue defaults")
+	}
 	if cfg.Metadata.Snapshot.Key == "" {
 		t.Fatalf("expected snapshot key default")
 	}
 	if cfg.DiscoveryCache.TTLSeconds == 0 || cfg.DiscoveryCache.MaxEntries == 0 {
 		t.Fatalf("expected discovery cache defaults")
 	}
+	if cfg.ResultCache.TTLSeconds == 0 || cfg.ResultCache.MaxEntries == 0 || cfg.ResultCache.MaxRows == 0 {
+		t.Fatalf("expected result cache defaults")
+	}
 	if cfg.Proxy.Listen == "" || cfg.Proxy.MaxConnections == 0 {
 		t.Fatalf("expected proxy defaults")
+	}
+	if cfg.Proxy.CacheTTLSeconds == 0 || cfg.Proxy.CacheMaxEntries == 0 {
+		t.Fatalf("expected proxy cache defaults")
 	}
 }
 
@@ -60,11 +69,19 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("KAFSQL_QUERY_MAX_SCAN_SEGMENTS", "12")
 	t.Setenv("KAFSQL_QUERY_MAX_ROWS", "345")
 	t.Setenv("KAFSQL_QUERY_TIMEOUT_SECONDS", "17")
+	t.Setenv("KAFSQL_QUERY_MAX_CONCURRENT", "7")
+	t.Setenv("KAFSQL_QUERY_QUEUE_SIZE", "9")
+	t.Setenv("KAFSQL_QUERY_QUEUE_TIMEOUT_SECONDS", "3")
 	t.Setenv("KAFSQL_PROXY_LISTEN", ":6432")
 	t.Setenv("KAFSQL_PROXY_UPSTREAMS", "kafsql-0:5432,kafsql-1:5432")
 	t.Setenv("KAFSQL_PROXY_MAX_CONNECTIONS", "55")
+	t.Setenv("KAFSQL_PROXY_CACHE_TTL_SECONDS", "15")
+	t.Setenv("KAFSQL_PROXY_CACHE_MAX_ENTRIES", "500")
 	t.Setenv("KAFSQL_PROXY_ACL_ALLOW", "orders,shipments-*")
 	t.Setenv("KAFSQL_PROXY_ACL_DENY", "payments")
+	t.Setenv("KAFSQL_RESULT_CACHE_TTL_SECONDS", "12")
+	t.Setenv("KAFSQL_RESULT_CACHE_MAX_ENTRIES", "9")
+	t.Setenv("KAFSQL_RESULT_CACHE_MAX_ROWS", "111")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -85,6 +102,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if cfg.Query.MaxScanBytes != 2048 || cfg.Query.MaxScanSegments != 12 || cfg.Query.MaxRows != 345 || cfg.Query.TimeoutSeconds != 17 {
 		t.Fatalf("expected query guardrail overrides, got %+v", cfg.Query)
 	}
+	if cfg.Query.MaxConcurrent != 7 || cfg.Query.QueueSize != 9 || cfg.Query.QueueTimeoutSec != 3 {
+		t.Fatalf("expected query queue overrides, got %+v", cfg.Query)
+	}
 	if cfg.Proxy.Listen != ":6432" || cfg.Proxy.MaxConnections != 55 {
 		t.Fatalf("expected proxy overrides, got %+v", cfg.Proxy)
 	}
@@ -93,6 +113,12 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if len(cfg.Proxy.ACL.Allow) != 2 || cfg.Proxy.ACL.Allow[0] != "orders" || cfg.Proxy.ACL.Deny[0] != "payments" {
 		t.Fatalf("expected proxy ACL overrides, got %+v", cfg.Proxy.ACL)
+	}
+	if cfg.Proxy.CacheTTLSeconds != 15 || cfg.Proxy.CacheMaxEntries != 500 {
+		t.Fatalf("expected proxy cache overrides, got %+v", cfg.Proxy)
+	}
+	if cfg.ResultCache.TTLSeconds != 12 || cfg.ResultCache.MaxEntries != 9 || cfg.ResultCache.MaxRows != 111 {
+		t.Fatalf("expected result cache overrides, got %+v", cfg.ResultCache)
 	}
 }
 

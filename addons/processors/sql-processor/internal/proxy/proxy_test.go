@@ -21,11 +21,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgproto3/v2"
 
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
+	kafsql "github.com/kafscale/platform/addons/processors/sql-processor/internal/sql"
 )
 
 func TestReceiveStartupHandlesSSL(t *testing.T) {
@@ -82,6 +84,39 @@ func TestReceiveStartupHandlesSSL(t *testing.T) {
 	}
 }
 
+func TestReceiveStartupCancelRequest(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	backend := pgproto3.NewBackend(pgproto3.NewChunkReader(serverConn), serverConn)
+	srv := New(configForTest(), log.New(io.Discard, "", 0))
+
+	done := make(chan *pgproto3.StartupMessage, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		msg, err := srv.receiveStartup(backend, serverConn)
+		errCh <- err
+		done <- msg
+	}()
+
+	buf, err := (&pgproto3.CancelRequest{ProcessID: 1, SecretKey: 2}).Encode(nil)
+	if err != nil {
+		t.Fatalf("encode cancel request: %v", err)
+	}
+	if _, err := clientConn.Write(buf); err != nil {
+		t.Fatalf("send cancel request: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("receive startup: %v", err)
+	}
+	msg := <-done
+	if msg != nil {
+		t.Fatalf("expected nil startup message")
+	}
+}
+
 func TestHandleConnAllowsQuery(t *testing.T) {
 	srv := New(config.ProxyConfig{
 		Listen:    ":0",
@@ -123,6 +158,52 @@ func TestHandleConnAllowsQuery(t *testing.T) {
 	}
 	if err := readUntilReady(frontend); err != nil {
 		t.Fatalf("ready after command: %v", err)
+	}
+
+	_ = frontend.Send(&pgproto3.Terminate{})
+	if err := <-errCh; err != nil && err != io.EOF {
+		t.Fatalf("handle conn: %v", err)
+	}
+}
+
+func TestHandleConnRejectsExtendedProtocol(t *testing.T) {
+	srv := New(config.ProxyConfig{
+		Listen:    ":0",
+		Upstreams: []string{"upstream"},
+	}, log.New(io.Discard, "", 0))
+	upstreamConn := startPipeUpstream(t)
+	srv.dialer = func(ctx context.Context, addr string) (net.Conn, error) {
+		return upstreamConn, nil
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.handleConn(context.Background(), serverConn)
+	}()
+
+	frontend := pgproto3.NewFrontend(pgproto3.NewChunkReader(clientConn), clientConn)
+	if err := sendStartupMessage(clientConn); err != nil {
+		t.Fatalf("send startup: %v", err)
+	}
+	if err := readUntilReady(frontend); err != nil {
+		t.Fatalf("startup response: %v", err)
+	}
+
+	if err := frontend.Send(&pgproto3.Parse{Name: "stmt", Query: "SELECT 1;"}); err != nil {
+		t.Fatalf("send parse: %v", err)
+	}
+	errResp, err := readError(frontend)
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if errResp == "" {
+		t.Fatalf("expected error response")
+	}
+	if err := readUntilReady(frontend); err != nil {
+		t.Fatalf("ready after error: %v", err)
 	}
 
 	_ = frontend.Send(&pgproto3.Terminate{})
@@ -177,6 +258,136 @@ func TestHandleConnDeniesQuery(t *testing.T) {
 	_ = frontend.Send(&pgproto3.Terminate{})
 	if err := <-errCh; err != nil && err != io.EOF {
 		t.Fatalf("handle conn: %v", err)
+	}
+}
+
+func TestDialUpstreamRoundRobin(t *testing.T) {
+	srv := New(config.ProxyConfig{
+		Listen:    ":0",
+		Upstreams: []string{"one", "two"},
+	}, log.New(io.Discard, "", 0))
+	addrs := make([]string, 0, 2)
+	srv.dialer = func(ctx context.Context, addr string) (net.Conn, error) {
+		addrs = append(addrs, addr)
+		c1, c2 := net.Pipe()
+		c1.Close()
+		return c2, nil
+	}
+
+	conn, err := srv.dialUpstream(context.Background())
+	if err != nil {
+		t.Fatalf("dial upstream: %v", err)
+	}
+	conn.Close()
+	conn, err = srv.dialUpstream(context.Background())
+	if err != nil {
+		t.Fatalf("dial upstream: %v", err)
+	}
+	conn.Close()
+
+	if len(addrs) != 2 || addrs[0] == addrs[1] {
+		t.Fatalf("expected round robin addresses, got %v", addrs)
+	}
+}
+
+func TestRelayUntilReady(t *testing.T) {
+	upstreamServer, upstreamClient := net.Pipe()
+	clientServer, clientClient := net.Pipe()
+	defer upstreamServer.Close()
+	defer upstreamClient.Close()
+	defer clientServer.Close()
+	defer clientClient.Close()
+
+	frontend := pgproto3.NewFrontend(pgproto3.NewChunkReader(upstreamClient), upstreamClient)
+	go func() {
+		backend := pgproto3.NewBackend(pgproto3.NewChunkReader(upstreamServer), upstreamServer)
+		_ = backend.Send(&pgproto3.AuthenticationOk{})
+		_ = backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	}()
+
+	readDone := make(chan error, 1)
+	go func() {
+		clientFrontend := pgproto3.NewFrontend(pgproto3.NewChunkReader(clientClient), clientClient)
+		if _, err := clientFrontend.Receive(); err != nil {
+			readDone <- err
+			return
+		}
+		if _, err := clientFrontend.Receive(); err != nil {
+			readDone <- err
+			return
+		}
+		readDone <- nil
+	}()
+
+	if err := relayUntilReady(frontend, clientServer); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatalf("read relayed messages: %v", err)
+	}
+}
+
+func TestSendError(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	backend := pgproto3.NewBackend(pgproto3.NewChunkReader(serverConn), serverConn)
+	frontend := pgproto3.NewFrontend(pgproto3.NewChunkReader(clientConn), clientConn)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sendError(backend, "nope")
+	}()
+
+	msg, err := frontend.Receive()
+	if err != nil {
+		t.Fatalf("receive error: %v", err)
+	}
+	if errResp, ok := msg.(*pgproto3.ErrorResponse); !ok || errResp.Message != "nope" {
+		t.Fatalf("unexpected error response: %#v", msg)
+	}
+	msg, err = frontend.Receive()
+	if err != nil {
+		t.Fatalf("receive ready: %v", err)
+	}
+	if _, ok := msg.(*pgproto3.ReadyForQuery); !ok {
+		t.Fatalf("expected ready for query")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("send error: %v", err)
+	}
+}
+
+func TestQueryTopicsExplain(t *testing.T) {
+	parsed, err := kafsql.Parse("EXPLAIN SELECT * FROM orders LAST 1h;")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	topics, showTopics := queryTopics(parsed)
+	if showTopics || len(topics) != 1 || topics[0] != "orders" {
+		t.Fatalf("unexpected topics: %v show=%t", topics, showTopics)
+	}
+}
+
+func TestTrimQuery(t *testing.T) {
+	query := strings.Repeat("a", 600)
+	trimmed := trimQuery(query)
+	if len(trimmed) <= 512 || !strings.HasSuffix(trimmed, "...") {
+		t.Fatalf("expected trimmed query, got len=%d", len(trimmed))
+	}
+}
+
+func TestDialUpstreamError(t *testing.T) {
+	srv := New(config.ProxyConfig{
+		Listen:    ":0",
+		Upstreams: []string{"bad"},
+	}, log.New(io.Discard, "", 0))
+	srv.dialer = func(ctx context.Context, addr string) (net.Conn, error) {
+		return nil, errors.New("boom")
+	}
+	if _, err := srv.dialUpstream(context.Background()); err == nil {
+		t.Fatalf("expected dial error")
 	}
 }
 

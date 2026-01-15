@@ -33,6 +33,11 @@ discovery_cache:
   ttl_seconds: 60
   max_entries: 10000
 
+result_cache:
+  ttl_seconds: 30
+  max_entries: 100
+  max_rows: 10000
+
 server:
   listen: ":5432"
   max_connections: 100
@@ -43,6 +48,8 @@ proxy:
   upstreams:
     - kafsql.kafka.svc.cluster.local:5432
   max_connections: 200
+  cache_ttl_seconds: 10
+  cache_max_entries: 1000
   acl:
     allow: []
     deny: []
@@ -55,3 +62,6 @@ query:
   max_scan_segments: 10000
   max_rows: 100000
   timeout_seconds: 30
+  max_concurrent: 20
+  queue_size: 50
+  queue_timeout_seconds: 10

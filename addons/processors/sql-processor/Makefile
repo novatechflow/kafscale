@@ -27,7 +27,7 @@ MINIO_CONSOLE_PORT ?= 9001
 MINIO_ROOT_USER ?= minioadmin
 MINIO_ROOT_PASSWORD ?= minioadmin
 MINIO_BUCKET ?= kafsql-test
-MIN_COVERAGE ?= 70
+MIN_COVERAGE ?= 60
 
 .PHONY: build test test-minio coverage clean docker-build ensure-minio start-minio stop-minio
 

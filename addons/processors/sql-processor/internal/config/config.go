@@ -32,6 +32,7 @@ type Config struct {
 	Query          QueryConfig          `yaml:"query"`
 	DiscoveryCache DiscoveryCacheConfig `yaml:"discovery_cache"`
 	Proxy          ProxyConfig          `yaml:"proxy"`
+	ResultCache    ResultCacheConfig    `yaml:"result_cache"`
 
 	Mappings []Mapping    `yaml:"mappings"`
 	Offsets  OffsetConfig `yaml:"offsets"`
@@ -88,6 +89,9 @@ type QueryConfig struct {
 	MaxScanSegments  int   `yaml:"max_scan_segments"`
 	MaxRows          int   `yaml:"max_rows"`
 	TimeoutSeconds   int   `yaml:"timeout_seconds"`
+	MaxConcurrent    int   `yaml:"max_concurrent"`
+	QueueSize        int   `yaml:"queue_size"`
+	QueueTimeoutSec  int   `yaml:"queue_timeout_seconds"`
 }
 
 type DiscoveryCacheConfig struct {
@@ -95,11 +99,18 @@ type DiscoveryCacheConfig struct {
 	MaxEntries int `yaml:"max_entries"`
 }
 
+type ResultCacheConfig struct {
+	TTLSeconds int `yaml:"ttl_seconds"`
+	MaxEntries int `yaml:"max_entries"`
+	MaxRows    int `yaml:"max_rows"`
+}
 type ProxyConfig struct {
-	Listen         string         `yaml:"listen"`
-	Upstreams      []string       `yaml:"upstreams"`
-	MaxConnections int            `yaml:"max_connections"`
-	ACL            ProxyACLConfig `yaml:"acl"`
+	Listen          string         `yaml:"listen"`
+	Upstreams       []string       `yaml:"upstreams"`
+	MaxConnections  int            `yaml:"max_connections"`
+	CacheTTLSeconds int            `yaml:"cache_ttl_seconds"`
+	CacheMaxEntries int            `yaml:"cache_max_entries"`
+	ACL             ProxyACLConfig `yaml:"acl"`
 }
 
 type ProxyACLConfig struct {
@@ -181,6 +192,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.Query.TimeoutSeconds == 0 {
 		cfg.Query.TimeoutSeconds = 30
 	}
+	if cfg.Query.MaxConcurrent == 0 {
+		cfg.Query.MaxConcurrent = 20
+	}
+	if cfg.Query.QueueSize == 0 {
+		cfg.Query.QueueSize = 50
+	}
+	if cfg.Query.QueueTimeoutSec == 0 {
+		cfg.Query.QueueTimeoutSec = 10
+	}
 	if cfg.Metadata.Snapshot.Key == "" {
 		cfg.Metadata.Snapshot.Key = "/kafscale/metadata/snapshot"
 	}
@@ -190,11 +210,26 @@ func applyDefaults(cfg *Config) {
 	if cfg.DiscoveryCache.MaxEntries == 0 {
 		cfg.DiscoveryCache.MaxEntries = 10000
 	}
+	if cfg.ResultCache.TTLSeconds == 0 {
+		cfg.ResultCache.TTLSeconds = 30
+	}
+	if cfg.ResultCache.MaxEntries == 0 {
+		cfg.ResultCache.MaxEntries = 100
+	}
+	if cfg.ResultCache.MaxRows == 0 {
+		cfg.ResultCache.MaxRows = 10000
+	}
 	if cfg.Proxy.Listen == "" {
 		cfg.Proxy.Listen = ":5432"
 	}
 	if cfg.Proxy.MaxConnections == 0 {
 		cfg.Proxy.MaxConnections = 200
+	}
+	if cfg.Proxy.CacheTTLSeconds == 0 {
+		cfg.Proxy.CacheTTLSeconds = 10
+	}
+	if cfg.Proxy.CacheMaxEntries == 0 {
+		cfg.Proxy.CacheMaxEntries = 1000
 	}
 }
 
@@ -223,13 +258,22 @@ func applyEnvOverrides(cfg *Config) {
 	setInt(&cfg.Query.MaxScanSegments, "KAFSQL_QUERY_MAX_SCAN_SEGMENTS")
 	setInt(&cfg.Query.MaxRows, "KAFSQL_QUERY_MAX_ROWS")
 	setInt(&cfg.Query.TimeoutSeconds, "KAFSQL_QUERY_TIMEOUT_SECONDS")
+	setInt(&cfg.Query.MaxConcurrent, "KAFSQL_QUERY_MAX_CONCURRENT")
+	setInt(&cfg.Query.QueueSize, "KAFSQL_QUERY_QUEUE_SIZE")
+	setInt(&cfg.Query.QueueTimeoutSec, "KAFSQL_QUERY_QUEUE_TIMEOUT_SECONDS")
 
 	setInt(&cfg.DiscoveryCache.TTLSeconds, "KAFSQL_DISCOVERY_CACHE_TTL_SECONDS")
 	setInt(&cfg.DiscoveryCache.MaxEntries, "KAFSQL_DISCOVERY_CACHE_MAX_ENTRIES")
 
+	setInt(&cfg.ResultCache.TTLSeconds, "KAFSQL_RESULT_CACHE_TTL_SECONDS")
+	setInt(&cfg.ResultCache.MaxEntries, "KAFSQL_RESULT_CACHE_MAX_ENTRIES")
+	setInt(&cfg.ResultCache.MaxRows, "KAFSQL_RESULT_CACHE_MAX_ROWS")
+
 	setString(&cfg.Proxy.Listen, "KAFSQL_PROXY_LISTEN")
 	setCSV(&cfg.Proxy.Upstreams, "KAFSQL_PROXY_UPSTREAMS")
 	setInt(&cfg.Proxy.MaxConnections, "KAFSQL_PROXY_MAX_CONNECTIONS")
+	setInt(&cfg.Proxy.CacheTTLSeconds, "KAFSQL_PROXY_CACHE_TTL_SECONDS")
+	setInt(&cfg.Proxy.CacheMaxEntries, "KAFSQL_PROXY_CACHE_MAX_ENTRIES")
 	setCSV(&cfg.Proxy.ACL.Allow, "KAFSQL_PROXY_ACL_ALLOW")
 	setCSV(&cfg.Proxy.ACL.Deny, "KAFSQL_PROXY_ACL_DENY")
 }

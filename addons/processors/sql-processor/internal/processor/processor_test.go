@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kafscale/platform/addons/processors/sql-processor/internal/checkpoint"
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/decoder"
+	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/sink"
 )
 
@@ -83,6 +85,57 @@ func TestRunContextCancelClosesSink(t *testing.T) {
 	}
 }
 
+func TestRunProcessesSegment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	segment := discovery.SegmentRef{
+		Topic:      "orders",
+		Partition:  0,
+		SegmentKey: "seg-1",
+		IndexKey:   "idx-1",
+	}
+	records := []decoder.Record{
+		{Topic: "orders", Partition: 0, Offset: 1, Value: []byte("a")},
+		{Topic: "orders", Partition: 0, Offset: 2, Value: []byte("b")},
+	}
+	discover := &mockDiscovery{segments: []discovery.SegmentRef{segment}}
+	dec := &mockDecoder{records: map[string][]decoder.Record{"seg-1": records}}
+	store := &mockStore{}
+	writer := &recordSink{written: make(chan []sink.Record, 1)}
+
+	p := &Processor{
+		discover: discover,
+		decode:   dec,
+		store:    store,
+		sink:     writer,
+		locks:    newTopicLocker(),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-writer.written:
+		cancel()
+	case <-time.After(6 * time.Second):
+		t.Fatalf("timed out waiting for write")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("processor did not stop")
+	}
+
+	if store.commitCount == 0 {
+		t.Fatalf("expected commit calls")
+	}
+}
+
 type closeSink struct {
 	mu         sync.Mutex
 	closedFlag bool
@@ -103,4 +156,61 @@ func (c *closeSink) closed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closedFlag
+}
+
+type mockDiscovery struct {
+	segments []discovery.SegmentRef
+}
+
+func (m *mockDiscovery) ListCompleted(ctx context.Context) ([]discovery.SegmentRef, error) {
+	return m.segments, nil
+}
+
+type mockDecoder struct {
+	records map[string][]decoder.Record
+}
+
+func (m *mockDecoder) Decode(ctx context.Context, segmentKey, indexKey string, topic string, partition int32) ([]decoder.Record, error) {
+	return m.records[segmentKey], nil
+}
+
+type mockStore struct {
+	commitCount int
+}
+
+func (m *mockStore) ClaimLease(ctx context.Context, topic string, partition int32, ownerID string) (checkpoint.Lease, error) {
+	return checkpoint.Lease{Topic: topic, Partition: partition, OwnerID: ownerID}, nil
+}
+
+func (m *mockStore) RenewLease(ctx context.Context, lease checkpoint.Lease) error {
+	return nil
+}
+
+func (m *mockStore) ReleaseLease(ctx context.Context, lease checkpoint.Lease) error {
+	return nil
+}
+
+func (m *mockStore) LoadOffset(ctx context.Context, topic string, partition int32) (checkpoint.OffsetState, error) {
+	return checkpoint.OffsetState{Topic: topic, Partition: partition, Offset: 0}, nil
+}
+
+func (m *mockStore) CommitOffset(ctx context.Context, state checkpoint.OffsetState) error {
+	m.commitCount++
+	return nil
+}
+
+type recordSink struct {
+	written chan []sink.Record
+}
+
+func (r *recordSink) Write(ctx context.Context, records []sink.Record) error {
+	select {
+	case r.written <- records:
+	default:
+	}
+	return nil
+}
+
+func (r *recordSink) Close(ctx context.Context) error {
+	return nil
 }

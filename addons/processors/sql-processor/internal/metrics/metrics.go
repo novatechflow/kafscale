@@ -155,6 +155,35 @@ var (
 			Help:      "Total discovery cache misses.",
 		},
 	)
+	QueryQueueDepth = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "query_queue_depth",
+			Help:      "Current depth of the query queue.",
+		},
+	)
+	QueryQueueRejected = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "query_queue_rejected_total",
+			Help:      "Queries rejected due to full queue.",
+		},
+	)
+	QueryQueueTimeout = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "query_queue_timeout_total",
+			Help:      "Queries that timed out waiting in the queue.",
+		},
+	)
+	QueryQueueWait = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "query_queue_wait_ms",
+			Help:      "Time spent waiting in the query queue in milliseconds.",
+			Buckets:   prometheus.DefBuckets,
+		},
+	)
 )
 
 func init() {
@@ -177,5 +206,9 @@ func init() {
 		SchemaMiss,
 		DiscoveryCacheHits,
 		DiscoveryCacheMisses,
+		QueryQueueDepth,
+		QueryQueueRejected,
+		QueryQueueTimeout,
+		QueryQueueWait,
 	)
 }

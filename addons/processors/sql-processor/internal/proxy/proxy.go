@@ -132,6 +132,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) error {
 	}
 
 	acl := ACL{Allow: s.cfg.ACL.Allow, Deny: s.cfg.ACL.Deny}
+	cache := newQueryCache(time.Duration(s.cfg.CacheTTLSeconds)*time.Second, s.cfg.CacheMaxEntries)
 	for {
 		msg, err := backend.Receive()
 		if err != nil {
@@ -142,14 +143,31 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) error {
 			return nil
 		case *pgproto3.Query:
 			start := time.Now()
-			allowed, reason, topics, showTopics := authorizeQuery(acl, m.String)
+			trimmed := trimQuery(m.String)
+			key := cacheKey(trimmed)
+			decision, hit := cache.get(key)
+			if !hit {
+				allowed, reason, topics, showTopics := authorizeQuery(acl, trimmed)
+				decision = cacheDecision{
+					created:    time.Now(),
+					allowed:    allowed,
+					reason:     reason,
+					topics:     topics,
+					showTopics: showTopics,
+				}
+				cache.set(key, decision)
+			}
+			allowed := decision.allowed
+			reason := decision.reason
+			topics := decision.topics
+			showTopics := decision.showTopics
 			if !allowed {
 				s.log.Printf("kafsql_proxy_audit decision=deny remote=%s topics=%s show_topics=%t reason=%q query=%q",
 					conn.RemoteAddr().String(),
 					strings.Join(topics, ","),
 					showTopics,
 					reason,
-					trimQuery(m.String),
+					trimmed,
 				)
 				if err := sendError(backend, reason); err != nil {
 					return err
@@ -167,7 +185,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) error {
 				strings.Join(topics, ","),
 				showTopics,
 				time.Since(start).Milliseconds(),
-				trimQuery(m.String),
+				trimmed,
 			)
 		default:
 			if err := sendError(backend, "extended protocol is not supported"); err != nil {

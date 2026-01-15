@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,8 @@ type Server struct {
 	serverVersion  string
 	clientEncoding string
 	logger         *log.Logger
+	resultCache    *resultCache
+	limiter        *queryLimiter
 
 	cfg          config.Config
 	resolverMu   sync.Mutex
@@ -75,6 +78,8 @@ func New(cfg config.Config, logger *log.Logger) *Server {
 		serverVersion:  cfg.Server.ServerVersion,
 		clientEncoding: cfg.Server.ClientEncoding,
 		logger:         logger,
+		resultCache:    newResultCache(time.Duration(cfg.ResultCache.TTLSeconds)*time.Second, cfg.ResultCache.MaxEntries),
+		limiter:        newQueryLimiter(cfg.Query.MaxConcurrent, cfg.Query.QueueSize),
 		cfg:            cfg,
 	}
 }
@@ -139,23 +144,68 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	_ = backend.Send(&pgproto3.ParameterStatus{Name: "server_version", Value: s.serverVersion})
 	_ = backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 
+	state := connState{
+		statements: make(map[string]preparedStatement),
+		portals:    make(map[string]boundPortal),
+	}
+
 	for {
 		msg, err := backend.Receive()
 		if err != nil {
 			return
 		}
 
-		switch msg.(type) {
+		switch msg := msg.(type) {
 		case *pgproto3.Terminate:
 			return
 		case *pgproto3.Query:
-			if err := s.handleQuery(ctx, backend, msg.(*pgproto3.Query).String); err != nil {
+			if err := s.handleQuery(ctx, backend, msg.String); err != nil {
 				_ = backend.Send(&pgproto3.ErrorResponse{
 					Severity: "ERROR",
 					Message:  err.Error(),
 				})
 			}
 			_ = backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+		case *pgproto3.Parse:
+			if state.failed {
+				continue
+			}
+			if err := s.handleParse(&state, backend, msg); err != nil {
+				state.failed = true
+			}
+		case *pgproto3.Bind:
+			if state.failed {
+				continue
+			}
+			if err := s.handleBind(&state, backend, msg); err != nil {
+				state.failed = true
+			}
+		case *pgproto3.Describe:
+			if state.failed {
+				continue
+			}
+			if err := s.handleDescribe(&state, backend, msg); err != nil {
+				state.failed = true
+			}
+		case *pgproto3.Execute:
+			if state.failed {
+				continue
+			}
+			if err := s.handleExecute(ctx, &state, backend, msg); err != nil {
+				state.failed = true
+			}
+		case *pgproto3.Close:
+			if state.failed {
+				continue
+			}
+			if err := s.handleClose(&state, backend, msg); err != nil {
+				state.failed = true
+			}
+		case *pgproto3.Sync:
+			state.failed = false
+			_ = backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+		case *pgproto3.Flush:
+			continue
 		default:
 			_ = backend.Send(&pgproto3.ErrorResponse{
 				Severity: "ERROR",
@@ -166,12 +216,260 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 }
 
+type connState struct {
+	statements map[string]preparedStatement
+	portals    map[string]boundPortal
+	failed     bool
+}
+
+type preparedStatement struct {
+	query  string
+	parsed kafsql.Query
+}
+
+type boundPortal struct {
+	statement string
+}
+
+func (s *Server) handleParse(state *connState, backend *pgproto3.Backend, msg *pgproto3.Parse) error {
+	query := strings.TrimSpace(msg.Query)
+	if query == "" {
+		return sendErrorResponse(backend, "empty query")
+	}
+	if hasParameters(query) {
+		return sendErrorResponse(backend, "parameters are not supported")
+	}
+	parsed, err := kafsql.Parse(query)
+	if err != nil {
+		return sendErrorResponse(backend, err.Error())
+	}
+	state.statements[msg.Name] = preparedStatement{query: query, parsed: parsed}
+	return backend.Send(&pgproto3.ParseComplete{})
+}
+
+func (s *Server) handleBind(state *connState, backend *pgproto3.Backend, msg *pgproto3.Bind) error {
+	stmt, ok := state.statements[msg.PreparedStatement]
+	if !ok {
+		return sendErrorResponse(backend, "unknown prepared statement")
+	}
+	if len(msg.Parameters) > 0 {
+		return sendErrorResponse(backend, "bind parameters are not supported")
+	}
+	state.portals[msg.DestinationPortal] = boundPortal{statement: msg.PreparedStatement}
+	_ = stmt
+	return backend.Send(&pgproto3.BindComplete{})
+}
+
+func (s *Server) handleDescribe(state *connState, backend *pgproto3.Backend, msg *pgproto3.Describe) error {
+	stmt, ok := s.lookupStatement(state, msg.ObjectType, msg.Name)
+	if !ok {
+		return sendErrorResponse(backend, "unknown prepared statement")
+	}
+	if err := backend.Send(&pgproto3.ParameterDescription{ParameterOIDs: nil}); err != nil {
+		return err
+	}
+	fields, err := s.describeFields(stmt.parsed)
+	if err != nil {
+		return sendErrorResponse(backend, err.Error())
+	}
+	if len(fields) == 0 {
+		return backend.Send(&pgproto3.NoData{})
+	}
+	return backend.Send(&pgproto3.RowDescription{Fields: fields})
+}
+
+func (s *Server) handleExecute(ctx context.Context, state *connState, backend *pgproto3.Backend, msg *pgproto3.Execute) error {
+	stmt, ok := s.lookupStatement(state, 'P', msg.Portal)
+	if !ok {
+		return sendErrorResponse(backend, "unknown portal")
+	}
+	if err := s.handlePreparedQuery(ctx, backend, stmt); err != nil {
+		return sendErrorResponse(backend, err.Error())
+	}
+	return nil
+}
+
+func (s *Server) handleClose(state *connState, backend *pgproto3.Backend, msg *pgproto3.Close) error {
+	switch msg.ObjectType {
+	case 'S':
+		delete(state.statements, msg.Name)
+	case 'P':
+		delete(state.portals, msg.Name)
+	default:
+		return sendErrorResponse(backend, "unsupported close target")
+	}
+	return backend.Send(&pgproto3.CloseComplete{})
+}
+
+func (s *Server) lookupStatement(state *connState, objectType byte, name string) (preparedStatement, bool) {
+	switch objectType {
+	case 'S':
+		stmt, ok := state.statements[name]
+		return stmt, ok
+	case 'P':
+		portal, ok := state.portals[name]
+		if !ok {
+			return preparedStatement{}, false
+		}
+		stmt, ok := state.statements[portal.statement]
+		return stmt, ok
+	default:
+		return preparedStatement{}, false
+	}
+}
+
+func (s *Server) handlePreparedQuery(ctx context.Context, backend *pgproto3.Backend, stmt preparedStatement) error {
+	start := time.Now()
+	metrics.ActiveQueries.Inc()
+	defer metrics.ActiveQueries.Dec()
+	ctx, cancel := s.withQueryTimeout(ctx)
+	defer cancel()
+	release, err := s.limiter.acquire(time.Duration(s.cfg.Query.QueueTimeoutSec) * time.Second)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if result, handled, err := s.handleSetCommand(ctx, backend, stmt.query); handled {
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		metrics.QueriesTotal.WithLabelValues("set", status).Inc()
+		metrics.QueryDuration.WithLabelValues("set", status).Observe(float64(time.Since(start).Milliseconds()))
+		metrics.QueryRows.WithLabelValues("set").Add(float64(result.rows))
+		s.logger.Printf("query_complete type=set status=%s duration_ms=%d rows=%d segments=%d bytes=%d query=%q",
+			status,
+			time.Since(start).Milliseconds(),
+			result.rows,
+			result.segments,
+			result.bytes,
+			trimQuery(stmt.query),
+		)
+		return err
+	}
+
+	queryType := string(stmt.parsed.Type)
+	var result queryResult
+	var execErr error
+	if stmt.parsed.Type == kafsql.QuerySelect {
+		result, _, execErr = s.handleSelectWithCache(ctx, backend, stmt.parsed, stmt.query)
+	} else {
+		result, execErr = s.executeQuery(ctx, backend, stmt.parsed)
+	}
+	status := "success"
+	if execErr != nil {
+		status = "error"
+	}
+	metrics.QueriesTotal.WithLabelValues(queryType, status).Inc()
+	metrics.QueryDuration.WithLabelValues(queryType, status).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.QueryRows.WithLabelValues(queryType).Add(float64(result.rows))
+	metrics.QuerySegments.Add(float64(result.segments))
+	metrics.QueryBytes.Add(float64(result.bytes))
+	s.logger.Printf("query_complete type=%s status=%s duration_ms=%d rows=%d segments=%d bytes=%d query=%q",
+		queryType,
+		status,
+		time.Since(start).Milliseconds(),
+		result.rows,
+		result.segments,
+		result.bytes,
+		trimQuery(stmt.query),
+	)
+	return execErr
+}
+
+func (s *Server) describeFields(parsed kafsql.Query) ([]pgproto3.FieldDescription, error) {
+	switch parsed.Type {
+	case kafsql.QueryShowTopics:
+		return []pgproto3.FieldDescription{
+			{Name: []byte("topic"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		}, nil
+	case kafsql.QueryShowPartitions:
+		return []pgproto3.FieldDescription{
+			{Name: []byte("partition"), DataTypeOID: 23, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		}, nil
+	case kafsql.QueryExplain:
+		return []pgproto3.FieldDescription{
+			{Name: []byte("QUERY PLAN"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		}, nil
+	case kafsql.QuerySelect:
+		if parsed.JoinTopic != "" {
+			cols, err := s.resolveJoinColumns(parsed)
+			if err != nil {
+				return nil, err
+			}
+			return buildRowDescription(cols), nil
+		}
+		if hasAggregates(parsed.Select) {
+			plan, err := s.buildAggregatePlan(parsed)
+			if err != nil {
+				return nil, err
+			}
+			fields := make([]pgproto3.FieldDescription, 0, len(plan.outputs))
+			for _, out := range plan.outputs {
+				fields = append(fields, pgproto3.FieldDescription{Name: []byte(out.Name), DataTypeOID: out.DataType, DataTypeSize: -1, TypeModifier: -1, Format: 0})
+			}
+			return fields, nil
+		}
+		cols, err := s.resolveSelectColumns(parsed.Topic, parsed.Select)
+		if err != nil {
+			return nil, err
+		}
+		return buildRowDescription(cols), nil
+	default:
+		return nil, fmt.Errorf("unsupported statement for describe")
+	}
+}
+
+func hasParameters(query string) bool {
+	re := regexp.MustCompile(`\$\d+`)
+	return re.MatchString(query)
+}
+
+func sendErrorResponse(backend *pgproto3.Backend, message string) error {
+	return backend.Send(&pgproto3.ErrorResponse{
+		Severity: "ERROR",
+		Message:  message,
+	})
+}
+
+func (s *Server) send(backend *pgproto3.Backend, collector *rowCollector, msg pgproto3.BackendMessage) error {
+	if collector != nil {
+		collector.capture(msg)
+	}
+	return backend.Send(msg)
+}
+
+func sendCached(backend *pgproto3.Backend, entry *cacheEntry) error {
+	if entry == nil {
+		return nil
+	}
+	if err := backend.Send(&pgproto3.RowDescription{Fields: entry.fields}); err != nil {
+		return err
+	}
+	for _, row := range entry.rows {
+		if err := backend.Send(&pgproto3.DataRow{Values: row}); err != nil {
+			return err
+		}
+	}
+	tag := entry.commandTag
+	if len(tag) == 0 {
+		tag = commandTag(entry.rowsCount)
+	}
+	return backend.Send(&pgproto3.CommandComplete{CommandTag: tag})
+}
+
 func (s *Server) handleQuery(ctx context.Context, backend *pgproto3.Backend, query string) error {
 	start := time.Now()
 	metrics.ActiveQueries.Inc()
 	defer metrics.ActiveQueries.Dec()
 	ctx, cancel := s.withQueryTimeout(ctx)
 	defer cancel()
+	release, err := s.limiter.acquire(time.Duration(s.cfg.Query.QueueTimeoutSec) * time.Second)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if result, handled, err := s.handleCatalogQuery(ctx, backend, query); handled {
 		status := "success"
@@ -220,7 +518,13 @@ func (s *Server) handleQuery(ctx context.Context, backend *pgproto3.Backend, que
 	}
 
 	queryType := string(parsed.Type)
-	result, execErr := s.executeQuery(ctx, backend, parsed)
+	var result queryResult
+	var execErr error
+	if parsed.Type == kafsql.QuerySelect {
+		result, _, execErr = s.handleSelectWithCache(ctx, backend, parsed, query)
+	} else {
+		result, execErr = s.executeQuery(ctx, backend, parsed)
+	}
 	status := "success"
 	if execErr != nil {
 		status = "error"
@@ -242,6 +546,49 @@ func (s *Server) handleQuery(ctx context.Context, backend *pgproto3.Backend, que
 		trimQuery(query),
 	)
 	return execErr
+}
+
+func (s *Server) handleSelectWithCache(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query, query string) (queryResult, bool, error) {
+	key, ok := s.cacheKey(parsed, query)
+	if ok && s.resultCache != nil {
+		if entry, hit := s.resultCache.Get(key); hit {
+			if err := sendCached(backend, entry); err != nil {
+				return queryResult{}, false, err
+			}
+			return queryResult{rows: entry.rowsCount, segments: entry.segments, bytes: entry.bytes}, true, nil
+		}
+	}
+
+	var collector *rowCollector
+	if ok && s.resultCache != nil {
+		collector = newRowCollector(s.cfg.ResultCache.MaxRows)
+	}
+	result, err := s.handleSelect(ctx, backend, parsed, collector)
+	if err != nil {
+		return result, false, err
+	}
+	if ok && s.resultCache != nil {
+		if entry := collector.entry(); entry != nil {
+			entry.segments = result.segments
+			entry.bytes = result.bytes
+			s.resultCache.Set(key, entry)
+		}
+	}
+	return result, false, nil
+}
+
+func (s *Server) cacheKey(parsed kafsql.Query, query string) (string, bool) {
+	if parsed.Tail != "" || parsed.ScanFull {
+		return "", false
+	}
+	if parsed.Last != "" {
+		return cacheKey(query, "last="+parsed.Last), true
+	}
+	if parsed.TsMin == nil || parsed.TsMax == nil {
+		return "", false
+	}
+	timeKey := fmt.Sprintf("ts=%d-%d", *parsed.TsMin, *parsed.TsMax)
+	return cacheKey(query, timeKey), true
 }
 
 func (s *Server) handleCatalogQuery(ctx context.Context, backend *pgproto3.Backend, query string) (queryResult, bool, error) {
@@ -391,7 +738,7 @@ func (s *Server) executeQuery(ctx context.Context, backend *pgproto3.Backend, pa
 		rows, err := s.handleShowPartitions(ctx, backend, parsed.Topic)
 		return queryResult{rows: rows}, err
 	case kafsql.QuerySelect:
-		return s.handleSelect(ctx, backend, parsed)
+		return s.handleSelect(ctx, backend, parsed, nil)
 	case kafsql.QueryExplain:
 		return s.handleExplain(ctx, backend, parsed)
 	default:
@@ -899,9 +1246,9 @@ func (s *Server) getDecoder() (decoder.Decoder, error) {
 	return s.decoder, s.decoderErr
 }
 
-func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query) (queryResult, error) {
+func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query, collector *rowCollector) (queryResult, error) {
 	if parsed.JoinTopic != "" {
-		return s.handleJoinSelect(ctx, backend, parsed)
+		return s.handleJoinSelect(ctx, backend, parsed, collector)
 	}
 	if parsed.Topic == "" {
 		return queryResult{}, errors.New("select requires a topic")
@@ -989,7 +1336,7 @@ func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, pa
 		if parsed.Tail != "" {
 			return queryResult{}, errors.New("tail not supported with aggregates")
 		}
-		return s.handleAggregateSelect(ctx, backend, parsed, candidates, timeMin, timeMax, limit)
+		return s.handleAggregateSelect(ctx, backend, parsed, candidates, timeMin, timeMax, limit, collector)
 	}
 
 	resolvedCols, err := s.resolveSelectColumns(parsed.Topic, parsed.Select)
@@ -997,7 +1344,7 @@ func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, pa
 		return queryResult{}, err
 	}
 	fields := buildRowDescription(resolvedCols)
-	if err := backend.Send(&pgproto3.RowDescription{Fields: fields}); err != nil {
+	if err := s.send(backend, collector, &pgproto3.RowDescription{Fields: fields}); err != nil {
 		return queryResult{}, err
 	}
 
@@ -1041,12 +1388,12 @@ func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, pa
 				tailRows = appendTailRow(tailRows, row, tailCount)
 				continue
 			}
-			if err := backend.Send(&pgproto3.DataRow{Values: row.values}); err != nil {
+			if err := s.send(backend, collector, &pgproto3.DataRow{Values: row.values}); err != nil {
 				return queryResult{}, err
 			}
 			sent++
 			if sent >= limit {
-				_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+				_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 				return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 			}
 		}
@@ -1063,21 +1410,21 @@ func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, pa
 			rows = rows[:limit]
 		}
 		for _, row := range rows {
-			if err := backend.Send(&pgproto3.DataRow{Values: row.values}); err != nil {
+			if err := s.send(backend, collector, &pgproto3.DataRow{Values: row.values}); err != nil {
 				return queryResult{}, err
 			}
 			sent++
 		}
 	} else if tailCount > 0 {
 		for _, row := range tailRows {
-			if err := backend.Send(&pgproto3.DataRow{Values: row.values}); err != nil {
+			if err := s.send(backend, collector, &pgproto3.DataRow{Values: row.values}); err != nil {
 				return queryResult{}, err
 			}
 			sent++
 		}
 	}
 
-	_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+	_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 	return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 }
 
@@ -1353,7 +1700,7 @@ type aggregatePlan struct {
 	outputs   []outputColumn
 }
 
-func (s *Server) handleAggregateSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query, segments []discovery.SegmentRef, timeMin *int64, timeMax *int64, limit int) (queryResult, error) {
+func (s *Server) handleAggregateSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query, segments []discovery.SegmentRef, timeMin *int64, timeMax *int64, limit int, collector *rowCollector) (queryResult, error) {
 	plan, err := s.buildAggregatePlan(parsed)
 	if err != nil {
 		return queryResult{}, err
@@ -1363,7 +1710,7 @@ func (s *Server) handleAggregateSelect(ctx context.Context, backend *pgproto3.Ba
 	for _, out := range plan.outputs {
 		fields = append(fields, pgproto3.FieldDescription{Name: []byte(out.Name), DataTypeOID: out.DataType, DataTypeSize: -1, TypeModifier: -1, Format: 0})
 	}
-	if err := backend.Send(&pgproto3.RowDescription{Fields: fields}); err != nil {
+	if err := s.send(backend, collector, &pgproto3.RowDescription{Fields: fields}); err != nil {
 		return queryResult{}, err
 	}
 
@@ -1433,13 +1780,13 @@ func (s *Server) handleAggregateSelect(ctx context.Context, backend *pgproto3.Ba
 		}
 		state := groups[key]
 		row := buildAggregateRow(plan, state)
-		if err := backend.Send(&pgproto3.DataRow{Values: row}); err != nil {
+		if err := s.send(backend, collector, &pgproto3.DataRow{Values: row}); err != nil {
 			return queryResult{}, err
 		}
 		sent++
 	}
 
-	_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+	_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 	return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 }
 
@@ -1872,7 +2219,7 @@ func aggMinMaxValue(state aggState, min bool) []byte {
 	}
 }
 
-func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query) (queryResult, error) {
+func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query, collector *rowCollector) (queryResult, error) {
 	if parsed.Topic == "" || parsed.JoinTopic == "" {
 		return queryResult{}, errors.New("join requires two topics")
 	}
@@ -1931,7 +2278,7 @@ func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend
 		return queryResult{}, err
 	}
 	fields := buildRowDescription(cols)
-	if err := backend.Send(&pgproto3.RowDescription{Fields: fields}); err != nil {
+	if err := s.send(backend, collector, &pgproto3.RowDescription{Fields: fields}); err != nil {
 		return queryResult{}, err
 	}
 
@@ -2005,13 +2352,13 @@ func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend
 		if key == "" {
 			if parsed.JoinType == "left" {
 				values := buildRowValues(cols, rowContext{left: left.Record, leftSeg: left.SegmentKey})
-				if err := backend.Send(&pgproto3.DataRow{Values: values}); err != nil {
+				if err := s.send(backend, collector, &pgproto3.DataRow{Values: values}); err != nil {
 					return queryResult{}, err
 				}
 				sent++
 			}
 			if sent >= limit {
-				_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+				_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 				return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 			}
 			continue
@@ -2029,31 +2376,31 @@ func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend
 				leftSeg:  left.SegmentKey,
 				rightSeg: right.SegmentKey,
 			})
-			if err := backend.Send(&pgproto3.DataRow{Values: values}); err != nil {
+			if err := s.send(backend, collector, &pgproto3.DataRow{Values: values}); err != nil {
 				return queryResult{}, err
 			}
 			sent++
 			matched = true
 			if sent >= limit {
-				_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+				_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 				return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 			}
 		}
 
 		if !matched && parsed.JoinType == "left" {
 			values := buildRowValues(cols, rowContext{left: left.Record, leftSeg: left.SegmentKey})
-			if err := backend.Send(&pgproto3.DataRow{Values: values}); err != nil {
+			if err := s.send(backend, collector, &pgproto3.DataRow{Values: values}); err != nil {
 				return queryResult{}, err
 			}
 			sent++
 			if sent >= limit {
-				_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+				_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 				return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 			}
 		}
 	}
 
-	_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(sent)})
+	_ = s.send(backend, collector, &pgproto3.CommandComplete{CommandTag: commandTag(sent)})
 	return queryResult{rows: sent, segments: segmentsScanned, bytes: bytesScanned}, nil
 }
 

@@ -21,6 +21,7 @@ BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
+SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
@@ -77,7 +78,7 @@ test: ## Run unit tests + vet + race
 	go vet ./...
 	go test -race ./...
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -142,10 +143,17 @@ $(STAMP_DIR)/etcd-tools.image: $(ETCD_TOOLS_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(ETCD_TOOLS_IMAGE) -f deploy/docker/etcd-tools.Dockerfile .
 	@touch $(STAMP_DIR)/etcd-tools.image
 
+SQL_PROCESSOR_SRCS := $(shell find addons/processors/sql-processor -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'Dockerfile')
+docker-build-sql-processor: $(STAMP_DIR)/sql-processor.image ## Build KAFSQL processor container image
+$(STAMP_DIR)/sql-processor.image: $(SQL_PROCESSOR_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(SQL_PROCESSOR_IMAGE) -f addons/processors/sql-processor/Dockerfile addons/processors/sql-processor
+	@touch $(STAMP_DIR)/sql-processor.image
+
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force

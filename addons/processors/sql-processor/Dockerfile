@@ -24,11 +24,13 @@ ARG GO_BUILD_FLAGS=
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build ${GO_BUILD_FLAGS} -o /out/sql-processor ./cmd/processor && \
-    go build ${GO_BUILD_FLAGS} -o /out/kafsql-proxy ./cmd/proxy
+    go build ${GO_BUILD_FLAGS} -o /out/kafsql-proxy ./cmd/proxy && \
+    go build ${GO_BUILD_FLAGS} -o /out/kafsql-backfill ./cmd/backfill
 
 FROM alpine:3.19
 WORKDIR /app
 COPY --from=build /out/sql-processor /app/sql-processor
 COPY --from=build /out/kafsql-proxy /app/kafsql-proxy
+COPY --from=build /out/kafsql-backfill /app/kafsql-backfill
 USER 65532:65532
 ENTRYPOINT ["/app/sql-processor"]

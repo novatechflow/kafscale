@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -21,6 +21,7 @@ BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
+SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
@@ -39,6 +40,12 @@ ICEBERG_DEMO_NAMESPACE ?= $(KAFSCALE_DEMO_NAMESPACE)
 ICEBERG_PROCESSOR_RELEASE ?= iceberg-processor-dev
 ICEBERG_PROCESSOR_REST_DEBUG ?=
 ICEBERG_PROCESSOR_BUILD_FLAGS ?=
+KAFSQL_DEMO_NAMESPACE ?= kafsql-demo
+KAFSQL_DEMO_CLUSTER ?= kafsql
+KAFSQL_DEMO_TOPIC ?= kafsql-demo-topic
+KAFSQL_DEMO_RECORDS ?= 200
+KAFSQL_DEMO_TIMEOUT_SEC ?= 120
+KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -77,7 +84,7 @@ test: ## Run unit tests + vet + race
 	go vet ./...
 	go test -race ./...
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -142,10 +149,17 @@ $(STAMP_DIR)/etcd-tools.image: $(ETCD_TOOLS_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(ETCD_TOOLS_IMAGE) -f deploy/docker/etcd-tools.Dockerfile .
 	@touch $(STAMP_DIR)/etcd-tools.image
 
+SQL_PROCESSOR_SRCS := $(shell find addons/processors/sql-processor -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'Dockerfile')
+docker-build-sql-processor: $(STAMP_DIR)/sql-processor.image ## Build KAFSQL processor container image
+$(STAMP_DIR)/sql-processor.image: $(SQL_PROCESSOR_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(SQL_PROCESSOR_IMAGE) -f addons/processors/sql-processor/Dockerfile addons/processors/sql-processor
+	@touch $(STAMP_DIR)/sql-processor.image
+
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force
@@ -496,6 +510,28 @@ iceberg-demo: demo-platform-bootstrap ## Run the Iceberg processor demo on kind.
 	ICEBERG_PROCESSOR_REST_DEBUG=$(ICEBERG_PROCESSOR_REST_DEBUG) \
 	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
 	bash scripts/iceberg-demo.sh
+
+kafsql-demo: KAFSCALE_DEMO_PROXY=0
+kafsql-demo: KAFSCALE_DEMO_CONSOLE=0
+kafsql-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+kafsql-demo: KAFSCALE_DEMO_ADVERTISED_HOST=
+kafsql-demo: demo-platform-bootstrap ## Run the KAFSQL processor e2e demo on kind.
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	KAFSQL_DEMO_NAMESPACE=$(KAFSQL_DEMO_NAMESPACE) \
+	KAFSQL_DEMO_CLUSTER=$(KAFSQL_DEMO_CLUSTER) \
+	KAFSQL_DEMO_TOPIC=$(KAFSQL_DEMO_TOPIC) \
+	KAFSQL_DEMO_RECORDS=$(KAFSQL_DEMO_RECORDS) \
+	KAFSQL_DEMO_TIMEOUT_SEC=$(KAFSQL_DEMO_TIMEOUT_SEC) \
+	KAFSQL_PROCESSOR_RELEASE=$(KAFSQL_PROCESSOR_RELEASE) \
+	SQL_PROCESSOR_IMAGE=$(SQL_PROCESSOR_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_REGION=$(MINIO_REGION) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/kafsql-demo.sh
 
 platform-demo: demo-platform ## Alias for demo-platform.
 

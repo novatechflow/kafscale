@@ -54,6 +54,30 @@ type Lister interface {
 }
 
 func New(cfg config.Config) (Lister, error) {
+	client, err := newS3Client(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	base := &s3Lister{
+		client: client,
+		bucket: cfg.S3.Bucket,
+		prefix: normalizePrefix(cfg.S3.Namespace),
+	}
+	if cfg.TimeIndex.Enabled {
+		base.timeIndex = newTimeIndexReader(client, cfg.S3.Bucket, cfg.TimeIndex.KeySuffix)
+	}
+	var lister Lister = base
+	if cfg.Manifest.Enabled {
+		lister = newManifestLister(client, cfg.S3.Bucket, base.prefix, cfg.Manifest.Key, time.Duration(cfg.Manifest.TTLSeconds)*time.Second, base)
+	}
+	if cfg.DiscoveryCache.TTLSeconds <= 0 {
+		return lister, nil
+	}
+	return newCachedLister(lister, time.Duration(cfg.DiscoveryCache.TTLSeconds)*time.Second, cfg.DiscoveryCache.MaxEntries), nil
+}
+
+func newS3Client(cfg config.Config) (*s3.Client, error) {
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
 	if cfg.S3.Region != "" {
 		loadOptions = append(loadOptions, awsconfig.WithRegion(cfg.S3.Region))
@@ -78,22 +102,14 @@ func New(cfg config.Config) (Lister, error) {
 			opts.UsePathStyle = true
 		}
 	})
-
-	base := &s3Lister{
-		client: client,
-		bucket: cfg.S3.Bucket,
-		prefix: normalizePrefix(cfg.S3.Namespace),
-	}
-	if cfg.DiscoveryCache.TTLSeconds <= 0 {
-		return base, nil
-	}
-	return newCachedLister(base, time.Duration(cfg.DiscoveryCache.TTLSeconds)*time.Second, cfg.DiscoveryCache.MaxEntries), nil
+	return client, nil
 }
 
 type s3Lister struct {
 	client *s3.Client
 	bucket string
 	prefix string
+	timeIndex *timeIndexReader
 }
 
 func (l *s3Lister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
@@ -143,7 +159,7 @@ func (l *s3Lister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
 		if err != nil || !ok {
 			continue
 		}
-		segments = append(segments, SegmentRef{
+		segment := SegmentRef{
 			Topic:        key.topic,
 			Partition:    key.partition,
 			BaseOffset:   key.baseOffset,
@@ -152,7 +168,11 @@ func (l *s3Lister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
 			SizeBytes:    entry.kfsSize,
 			LastModified: entry.kfsModified,
 			MinOffset:    int64Ptr(key.baseOffset),
-		})
+		}
+		if l.timeIndex != nil {
+			l.timeIndex.enrich(ctx, &segment)
+		}
+		segments = append(segments, segment)
 	}
 
 	sort.Slice(segments, func(i, j int) bool {

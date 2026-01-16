@@ -46,6 +46,18 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DiscoveryCache.TTLSeconds == 0 || cfg.DiscoveryCache.MaxEntries == 0 {
 		t.Fatalf("expected discovery cache defaults")
 	}
+	if cfg.Manifest.Key == "" || cfg.Manifest.TTLSeconds == 0 {
+		t.Fatalf("expected manifest defaults")
+	}
+	if cfg.Manifest.BuildLeaseTTLSeconds == 0 {
+		t.Fatalf("expected manifest lease default")
+	}
+	if cfg.TimeIndex.KeySuffix == "" {
+		t.Fatalf("expected time index defaults")
+	}
+	if cfg.TimeIndex.BuildLeaseTTLSeconds == 0 {
+		t.Fatalf("expected time index lease default")
+	}
 	if cfg.ResultCache.TTLSeconds == 0 || cfg.ResultCache.MaxEntries == 0 || cfg.ResultCache.MaxRows == 0 {
 		t.Fatalf("expected result cache defaults")
 	}
@@ -65,6 +77,18 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("KAFSQL_METADATA_SNAPSHOT_KEY", "/custom/snapshot")
 	t.Setenv("KAFSQL_DISCOVERY_CACHE_TTL_SECONDS", "25")
 	t.Setenv("KAFSQL_DISCOVERY_CACHE_MAX_ENTRIES", "500")
+	t.Setenv("KAFSQL_MANIFEST_ENABLED", "true")
+	t.Setenv("KAFSQL_MANIFEST_KEY", "manifests/segments.json")
+	t.Setenv("KAFSQL_MANIFEST_TTL_SECONDS", "45")
+	t.Setenv("KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS", "120")
+	t.Setenv("KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS", "55")
+	t.Setenv("KAFSQL_MANIFEST_BUILD_MAX_BYTES", "999")
+	t.Setenv("KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS", "200")
+	t.Setenv("KAFSQL_TIME_INDEX_ENABLED", "true")
+	t.Setenv("KAFSQL_TIME_INDEX_SUFFIX", ".timeindex")
+	t.Setenv("KAFSQL_TIME_INDEX_BUILD_MAX_SEGMENTS", "7")
+	t.Setenv("KAFSQL_TIME_INDEX_BUILD_MAX_BYTES", "1234")
+	t.Setenv("KAFSQL_TIME_INDEX_BUILD_LEASE_TTL_SECONDS", "180")
 	t.Setenv("KAFSQL_QUERY_MAX_SCAN_BYTES", "2048")
 	t.Setenv("KAFSQL_QUERY_MAX_SCAN_SEGMENTS", "12")
 	t.Setenv("KAFSQL_QUERY_MAX_ROWS", "345")
@@ -98,6 +122,24 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.DiscoveryCache.TTLSeconds != 25 || cfg.DiscoveryCache.MaxEntries != 500 {
 		t.Fatalf("expected discovery cache overrides, got %+v", cfg.DiscoveryCache)
+	}
+	if !cfg.Manifest.Enabled || cfg.Manifest.Key != "manifests/segments.json" || cfg.Manifest.TTLSeconds != 45 {
+		t.Fatalf("expected manifest overrides, got %+v", cfg.Manifest)
+	}
+	if cfg.Manifest.BuildIntervalSeconds != 120 || cfg.Manifest.BuildMaxSegments != 55 || cfg.Manifest.BuildMaxBytes != 999 {
+		t.Fatalf("expected manifest build overrides, got %+v", cfg.Manifest)
+	}
+	if cfg.Manifest.BuildLeaseTTLSeconds != 200 {
+		t.Fatalf("expected manifest lease override, got %+v", cfg.Manifest)
+	}
+	if !cfg.TimeIndex.Enabled || cfg.TimeIndex.KeySuffix != ".timeindex" {
+		t.Fatalf("expected time index overrides, got %+v", cfg.TimeIndex)
+	}
+	if cfg.TimeIndex.BuildMaxSegments != 7 || cfg.TimeIndex.BuildMaxBytes != 1234 {
+		t.Fatalf("expected time index build overrides, got %+v", cfg.TimeIndex)
+	}
+	if cfg.TimeIndex.BuildLeaseTTLSeconds != 180 {
+		t.Fatalf("expected time index lease override, got %+v", cfg.TimeIndex)
 	}
 	if cfg.Query.MaxScanBytes != 2048 || cfg.Query.MaxScanSegments != 12 || cfg.Query.MaxRows != 345 || cfg.Query.TimeoutSeconds != 17 {
 		t.Fatalf("expected query guardrail overrides, got %+v", cfg.Query)

@@ -31,6 +31,8 @@ type Config struct {
 	Metadata       MetaConfig           `yaml:"metadata"`
 	Query          QueryConfig          `yaml:"query"`
 	DiscoveryCache DiscoveryCacheConfig `yaml:"discovery_cache"`
+	Manifest       ManifestConfig       `yaml:"discovery_manifest"`
+	TimeIndex      TimeIndexConfig      `yaml:"time_index"`
 	Proxy          ProxyConfig          `yaml:"proxy"`
 	ResultCache    ResultCacheConfig    `yaml:"result_cache"`
 
@@ -97,6 +99,24 @@ type QueryConfig struct {
 type DiscoveryCacheConfig struct {
 	TTLSeconds int `yaml:"ttl_seconds"`
 	MaxEntries int `yaml:"max_entries"`
+}
+
+type ManifestConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	Key                  string `yaml:"key"`
+	TTLSeconds           int    `yaml:"ttl_seconds"`
+	BuildIntervalSeconds int    `yaml:"build_interval_seconds"`
+	BuildMaxSegments     int    `yaml:"build_max_segments"`
+	BuildMaxBytes        int64  `yaml:"build_max_bytes"`
+	BuildLeaseTTLSeconds int    `yaml:"build_lease_ttl_seconds"`
+}
+
+type TimeIndexConfig struct {
+	Enabled         bool  `yaml:"enabled"`
+	KeySuffix       string `yaml:"key_suffix"`
+	BuildMaxSegments int   `yaml:"build_max_segments"`
+	BuildMaxBytes    int64 `yaml:"build_max_bytes"`
+	BuildLeaseTTLSeconds int `yaml:"build_lease_ttl_seconds"`
 }
 
 type ResultCacheConfig struct {
@@ -210,6 +230,24 @@ func applyDefaults(cfg *Config) {
 	if cfg.DiscoveryCache.MaxEntries == 0 {
 		cfg.DiscoveryCache.MaxEntries = 10000
 	}
+	if cfg.Manifest.Key == "" {
+		cfg.Manifest.Key = "manifest.json"
+	}
+	if cfg.Manifest.TTLSeconds == 0 {
+		cfg.Manifest.TTLSeconds = 60
+	}
+	if cfg.Manifest.BuildIntervalSeconds < 0 {
+		cfg.Manifest.BuildIntervalSeconds = 0
+	}
+	if cfg.Manifest.BuildLeaseTTLSeconds == 0 {
+		cfg.Manifest.BuildLeaseTTLSeconds = 120
+	}
+	if cfg.TimeIndex.KeySuffix == "" {
+		cfg.TimeIndex.KeySuffix = ".kfst"
+	}
+	if cfg.TimeIndex.BuildLeaseTTLSeconds == 0 {
+		cfg.TimeIndex.BuildLeaseTTLSeconds = 120
+	}
 	if cfg.ResultCache.TTLSeconds == 0 {
 		cfg.ResultCache.TTLSeconds = 30
 	}
@@ -264,6 +302,19 @@ func applyEnvOverrides(cfg *Config) {
 
 	setInt(&cfg.DiscoveryCache.TTLSeconds, "KAFSQL_DISCOVERY_CACHE_TTL_SECONDS")
 	setInt(&cfg.DiscoveryCache.MaxEntries, "KAFSQL_DISCOVERY_CACHE_MAX_ENTRIES")
+	setBool(&cfg.Manifest.Enabled, "KAFSQL_MANIFEST_ENABLED")
+	setString(&cfg.Manifest.Key, "KAFSQL_MANIFEST_KEY")
+	setInt(&cfg.Manifest.TTLSeconds, "KAFSQL_MANIFEST_TTL_SECONDS")
+	setInt(&cfg.Manifest.BuildIntervalSeconds, "KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS")
+	setInt(&cfg.Manifest.BuildMaxSegments, "KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS")
+	setInt64(&cfg.Manifest.BuildMaxBytes, "KAFSQL_MANIFEST_BUILD_MAX_BYTES")
+	setInt(&cfg.Manifest.BuildLeaseTTLSeconds, "KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS")
+
+	setBool(&cfg.TimeIndex.Enabled, "KAFSQL_TIME_INDEX_ENABLED")
+	setString(&cfg.TimeIndex.KeySuffix, "KAFSQL_TIME_INDEX_SUFFIX")
+	setInt(&cfg.TimeIndex.BuildMaxSegments, "KAFSQL_TIME_INDEX_BUILD_MAX_SEGMENTS")
+	setInt64(&cfg.TimeIndex.BuildMaxBytes, "KAFSQL_TIME_INDEX_BUILD_MAX_BYTES")
+	setInt(&cfg.TimeIndex.BuildLeaseTTLSeconds, "KAFSQL_TIME_INDEX_BUILD_LEASE_TTL_SECONDS")
 
 	setInt(&cfg.ResultCache.TTLSeconds, "KAFSQL_RESULT_CACHE_TTL_SECONDS")
 	setInt(&cfg.ResultCache.MaxEntries, "KAFSQL_RESULT_CACHE_MAX_ENTRIES")

@@ -47,7 +47,7 @@ func TestMinioDiscoveryAndDecode(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", secretKey)
 	t.Setenv("AWS_REGION", "us-east-1")
 
-	client, err := newS3Client(endpoint)
+	client, err := newMinioS3Client(endpoint)
 	if err != nil {
 		t.Fatalf("s3 client: %v", err)
 	}
@@ -115,7 +115,7 @@ const (
 	minioRecordBatchHeaderLen = 61
 )
 
-func newS3Client(endpoint string) (*s3.Client, error) {
+func newMinioS3Client(endpoint string) (*s3.Client, error) {
 	resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, _ ...interface{}) (aws.Endpoint, error) {
 		if service == s3.ServiceID {
 			return aws.Endpoint{URL: endpoint, SigningRegion: region}, nil

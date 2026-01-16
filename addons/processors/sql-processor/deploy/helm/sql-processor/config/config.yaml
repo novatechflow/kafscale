@@ -33,6 +33,22 @@ discovery_cache:
   ttl_seconds: 60
   max_entries: 10000
 
+discovery_manifest:
+  enabled: false
+  key: manifest.json
+  ttl_seconds: 60
+  build_interval_seconds: 0
+  build_max_segments: 0
+  build_max_bytes: 0
+  build_lease_ttl_seconds: 120
+
+time_index:
+  enabled: false
+  key_suffix: .kfst
+  build_max_segments: 0
+  build_max_bytes: 0
+  build_lease_ttl_seconds: 120
+
 result_cache:
   ttl_seconds: 30
   max_entries: 100
